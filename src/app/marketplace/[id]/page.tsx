@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Header, Footer } from '@/components/layout';
 import { PrimaryButton } from '@/components/ui';
 import { PaymentManager } from '@/lib/payment-utils';
+import { firestore } from '@/lib/firebase';
 
 interface AIModel {
   id: string;
@@ -53,40 +54,67 @@ export default function ModelDetailsPage() {
     loadModelDetails();
   }, [modelId]);
 
-  const loadModelDetails = () => {
+  const loadModelDetails = async () => {
     try {
-      const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
-      const foundModel = allModels.find((m: AIModel) => m.id === modelId);
+      console.log('🔄 Loading model details from Firestore...');
       
-      if (!foundModel) {
+      // Try Firestore first
+      const allModels = await firestore.query('aiModels');
+      const foundModel = allModels.find((m: any) => m.id === modelId) as AIModel;
+      
+      if (foundModel) {
+        processModel(foundModel);
+        return;
+      }
+      
+      // Fallback to localStorage
+      const localModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      const localFoundModel = localModels.find((m: AIModel) => m.id === modelId);
+      
+      if (!localFoundModel) {
         setError('Model not found');
         setLoading(false);
         return;
       }
-
-      if (foundModel.status !== 'approved') {
-        setError('This model is not available for viewing');
+      
+      processModel(localFoundModel);
+      
+    } catch (error) {
+      console.error('❌ Error loading from Firestore:', error);
+      
+      // Fallback to localStorage
+      const localModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      const localFoundModel = localModels.find((m: AIModel) => m.id === modelId);
+      
+      if (!localFoundModel) {
+        setError('Model not found');
         setLoading(false);
         return;
       }
-
-      trackView(foundModel.id);
       
-      const userLikes = JSON.parse(localStorage.getItem('userLikes') || '{}');
-      setIsLiked(userLikes[foundModel.id] === true);
-
-      if (currentUser) {
-        const purchased = PaymentManager.hasUserPurchasedModel(currentUser.id, foundModel.id);
-        setHasPurchased(purchased);
-      }
-
-      setModel(foundModel);
-    } catch (error) {
-      setError('Failed to load model details');
-      console.error('Error loading model:', error);
-    } finally {
-      setLoading(false);
+      processModel(localFoundModel);
     }
+  };
+
+  const processModel = (model: AIModel) => {
+    if (model.status !== 'approved') {
+      setError('This model is not available for viewing');
+      setLoading(false);
+      return;
+    }
+
+    trackView(model.id);
+    
+    const userLikes = JSON.parse(localStorage.getItem('userLikes') || '{}');
+    setIsLiked(userLikes[model.id] === true);
+
+    if (currentUser) {
+      const purchased = PaymentManager.hasUserPurchasedModel(currentUser.id, model.id);
+      setHasPurchased(purchased);
+    }
+
+    setModel(model);
+    setLoading(false);
   };
 
   const trackView = (modelId: string) => {

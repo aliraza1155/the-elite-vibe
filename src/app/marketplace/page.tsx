@@ -6,6 +6,7 @@ import { Header, Footer } from '@/components/layout';
 import { PrimaryButton } from '@/components/ui';
 import Link from 'next/link';
 import { PaymentManager } from '@/lib/payment-utils';
+import { firestore } from '@/lib/firebase';
 
 interface AIModel {
   id: string;
@@ -57,15 +58,33 @@ export default function MarketplacePage() {
     });
   };
 
-  const loadModels = () => {
+  const loadModels = async () => {
     try {
+      console.log('🔄 Loading models from Firestore...');
+      
+      // Try to load from Firestore first
+      const firestoreModels = await firestore.query('aiModels');
+      console.log('✅ Loaded from Firestore:', firestoreModels.length, 'models');
+      
+      // Convert FirestoreDocument to AIModel and filter
+      const approvedModels = firestoreModels
+        .filter((model: any) => model.status === 'approved')
+        .map((model: any) => model as AIModel);
+      
+      const activeModels = getActiveModels(approvedModels);
+      
+      // Update localStorage with Firestore data for offline access
+      localStorage.setItem('aiModels', JSON.stringify(firestoreModels));
+      
+      setModels(activeModels);
+    } catch (error) {
+      console.error('❌ Error loading from Firestore, falling back to localStorage:', error);
+      
+      // Fallback to localStorage if Firestore fails
       const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
       const approvedModels = allModels.filter((model: AIModel) => model.status === 'approved');
       const activeModels = getActiveModels(approvedModels);
       setModels(activeModels);
-    } catch (error) {
-      console.error('Error loading models:', error);
-      setModels([]);
     } finally {
       setLoading(false);
     }

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Header, Footer } from '@/components/layout';
 import { PrimaryButton } from '@/components/ui';
-import { storageService } from '@/lib/firebase';
+import { storageService, firestore } from '@/lib/firebase';
 import { AuthGuard } from '@/components/auth-guard';
 
 // Enhanced interfaces
@@ -751,7 +751,6 @@ export default function UltraFastUploadPage() {
   const createModelInDatabase = async (modelId: string, modelData: any, uploadResults: any, userId: string) => {
     console.log('Creating model in database:', modelId);
     
-    const existingModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
     const modelRecord = {
       id: modelId,
       name: modelData.name,
@@ -759,15 +758,15 @@ export default function UltraFastUploadPage() {
       description: modelData.description,
       framework: modelData.framework || '',
       modelSize: modelData.modelSize || '',
-      status: 'pending', // Models start as pending until approved
+      status: 'pending',
       price: parseFloat(modelData.price) || 50,
       owner: userId,
       ownerName: currentUser.displayName || currentUser.username || currentUser.email?.split('@')[0] || 'Anonymous',
       media: {
-        sfwImages: uploadResults.sfwImages,
-        nsfwImages: uploadResults.nsfwImages,
-        sfwVideos: uploadResults.sfwVideos,
-        nsfwVideos: uploadResults.nsfwVideos,
+        sfwImages: uploadResults.sfwImages || [],
+        nsfwImages: uploadResults.nsfwImages || [],
+        sfwVideos: uploadResults.sfwVideos || [],
+        nsfwVideos: uploadResults.nsfwVideos || [],
       },
       stats: {
         views: 0,
@@ -779,10 +778,27 @@ export default function UltraFastUploadPage() {
       updatedAt: new Date().toISOString(),
     };
 
-    const updatedModels = [...existingModels, modelRecord];
-    localStorage.setItem('aiModels', JSON.stringify(updatedModels));
-    
-    return modelRecord;
+    try {
+      // ✅ Save to Firebase Firestore (this makes it visible to all users)
+      await firestore.create('aiModels', modelRecord);
+      console.log('✅ Model saved to Firestore');
+      
+      // ✅ Also keep local copy for immediate access
+      const existingModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      const updatedModels = [...existingModels, modelRecord];
+      localStorage.setItem('aiModels', JSON.stringify(updatedModels));
+      
+      return modelRecord;
+    } catch (error) {
+      console.error('❌ Error saving model to Firestore:', error);
+      
+      // Fallback: still save to localStorage
+      const existingModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      const updatedModels = [...existingModels, modelRecord];
+      localStorage.setItem('aiModels', JSON.stringify(updatedModels));
+      
+      throw new Error('Failed to save model to database');
+    }
   };
 
   // Formatting utilities
