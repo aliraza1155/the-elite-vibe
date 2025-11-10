@@ -693,63 +693,8 @@ export default function UltraFastUploadPage() {
     });
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
-    setSubmitting(true);
-
-    try {
-      const validation = validateUpload();
-      if (!validation.isValid) {
-        setError(`Please fix: ${validation.errors.join(', ')}`);
-        setSubmitting(false);
-        return;
-      }
-
-      const modelId = `model_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      
-      // Ask user if they want background upload
-      const enableBackground = window.confirm(
-        '🚀 Enable Background Upload?\n\n' +
-        '✅ Continue uploading even if you close this tab\n' +
-        '✅ Resume automatically if connection fails\n' +
-        '✅ Track progress from your dashboard\n\n' +
-        'Click OK for background upload, Cancel for normal upload.'
-      );
-
-      // Start ultra-fast upload
-      const uploadResults = await startUltraFastUpload(modelId, currentUser.id, enableBackground);
-      
-      if (uploadResults.errors.length > 0) {
-        setError(`Some uploads failed: ${uploadResults.errors.slice(0, 3).join(', ')}`);
-        return;
-      }
-
-      // Create model record
-      await createModelInDatabase(modelId, modelDetails, uploadResults, currentUser.id);
-
-      const successMsg = enableBackground 
-        ? '🎉 Upload started in background! You can close this tab and check progress in your dashboard.'
-        : '🎉 Model uploaded successfully!';
-      
-      setSuccess(successMsg);
-      
-      if (!enableBackground) {
-        setTimeout(() => {
-          router.push('/seller');
-        }, 3000);
-      }
-      
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Upload failed');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   const createModelInDatabase = async (modelId: string, modelData: any, uploadResults: any, userId: string) => {
-    console.log('Creating model in database:', modelId);
+    console.log('🔄 Creating model in Firestore database...');
     
     const modelRecord = {
       id: modelId,
@@ -779,25 +724,82 @@ export default function UltraFastUploadPage() {
     };
 
     try {
-      // ✅ Save to Firebase Firestore (this makes it visible to all users)
-      await firestore.create('aiModels', modelRecord);
-      console.log('✅ Model saved to Firestore');
+      console.log('📝 Saving model to Firestore:', modelId);
       
-      // ✅ Also keep local copy for immediate access
-      const existingModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
-      const updatedModels = [...existingModels, modelRecord];
-      localStorage.setItem('aiModels', JSON.stringify(updatedModels));
+      // ✅ Save to Firebase Firestore
+      await firestore.create('aiModels', modelRecord);
+      console.log('✅ Model successfully saved to Firestore');
       
       return modelRecord;
     } catch (error) {
       console.error('❌ Error saving model to Firestore:', error);
+      throw new Error('Failed to save model to database. Please try again.');
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+    setSubmitting(true);
+
+    try {
+      const validation = validateUpload();
+      if (!validation.isValid) {
+        setError(`Please fix: ${validation.errors.join(', ')}`);
+        setSubmitting(false);
+        return;
+      }
+
+      const modelId = `model_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
-      // Fallback: still save to localStorage
-      const existingModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
-      const updatedModels = [...existingModels, modelRecord];
-      localStorage.setItem('aiModels', JSON.stringify(updatedModels));
+      // Ask user if they want background upload
+      const enableBackground = window.confirm(
+        '🚀 Enable Background Upload?\n\n' +
+        '✅ Continue uploading even if you close this tab\n' +
+        '✅ Resume automatically if connection fails\n' +
+        '✅ Track progress from your dashboard\n\n' +
+        'Click OK for background upload, Cancel for normal upload.'
+      );
+
+      console.log('🚀 Starting ultra-fast upload process...');
+      console.log('📁 Model ID:', modelId);
+      console.log('👤 User ID:', currentUser.id);
+      console.log('📊 Total files:', files.totalFiles);
+      console.log('💾 Estimated size:', formatFileSize(files.totalSize));
+
+      // Start ultra-fast upload
+      const uploadResults = await startUltraFastUpload(modelId, currentUser.id, enableBackground);
       
-      throw new Error('Failed to save model to database');
+      if (uploadResults.errors.length > 0) {
+        console.error('❌ Some uploads failed:', uploadResults.errors);
+        setError(`Some uploads failed: ${uploadResults.errors.slice(0, 3).join(', ')}`);
+        return;
+      }
+
+      console.log('✅ All files uploaded successfully');
+      console.log('📝 Creating model record in database...');
+
+      // Create model record in Firestore
+      await createModelInDatabase(modelId, modelDetails, uploadResults, currentUser.id);
+
+      const successMsg = enableBackground 
+        ? '🎉 Upload started in background! You can close this tab and check progress in your dashboard.'
+        : '🎉 Model uploaded successfully! Redirecting to dashboard...';
+      
+      setSuccess(successMsg);
+      
+      if (!enableBackground) {
+        setTimeout(() => {
+          router.push('/seller');
+        }, 3000);
+      }
+      
+    } catch (error) {
+      console.error('❌ Upload process failed:', error);
+      setError(error instanceof Error ? error.message : 'Upload failed. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
   };
 

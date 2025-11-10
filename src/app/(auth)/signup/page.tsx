@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { PrimaryButton } from '@/components/ui';
 import { UserManager } from '@/lib/user-utils';
+import { userService } from '@/lib/firebase';
 
 export default function SignupPage() {
   const [formData, setFormData] = useState({
@@ -52,6 +53,7 @@ export default function SignupPage() {
     setLoading(true);
 
     try {
+      // Client-side validation
       const usernameValidation = UserManager.validateUsername(formData.username);
       if (!usernameValidation.isValid) {
         setError(usernameValidation.errors[0]);
@@ -79,18 +81,34 @@ export default function SignupPage() {
         return;
       }
 
+      // Check for existing users in Firestore
+      const existingEmail = await userService.findUserByEmail(formData.email);
+      if (existingEmail) {
+        setError('An account with this email already exists');
+        setLoading(false);
+        return;
+      }
+
+      const existingUsername = await userService.findUserByUsername(formData.username);
+      if (existingUsername) {
+        setError('Username already taken');
+        setLoading(false);
+        return;
+      }
+
       const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const user = {
         id: userId,
         username: formData.username,
         displayName: formData.displayName || formData.username,
         email: formData.email,
-        password: formData.password, // ✅ Store password for login
+        password: formData.password,
         role: formData.role,
         profile: {
           displayName: formData.displayName || formData.username,
           ageVerified: false,
-          bio: ''
+          bio: '',
+          profilePicture: ''
         },
         stats: {
           totalListings: 0,
@@ -104,33 +122,15 @@ export default function SignupPage() {
           pending: 0,
           paidOut: 0
         } : undefined,
-        // Initialize subscription as null
         subscription: null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
 
-      const existingUsers = JSON.parse(localStorage.getItem('users') || '[]');
-      
-      // Check if email already exists
-      const existingUser = existingUsers.find((u: any) => u.email === formData.email);
-      if (existingUser) {
-        setError('An account with this email already exists');
-        setLoading(false);
-        return;
-      }
+      // Save to Firestore
+      await userService.createUser(user);
+      console.log('✅ User saved to Firestore');
 
-      // Check if username already exists
-      const existingUsername = existingUsers.find((u: any) => u.username === formData.username);
-      if (existingUsername) {
-        setError('Username already taken');
-        setLoading(false);
-        return;
-      }
-
-      existingUsers.push(user);
-      localStorage.setItem('users', JSON.stringify(existingUsers));
-      
       // Create session without password for security
       const { password: _, ...userWithoutPassword } = user;
       localStorage.setItem('currentUser', JSON.stringify(userWithoutPassword));
@@ -146,7 +146,8 @@ export default function SignupPage() {
       }, 2000);
 
     } catch (error) {
-      setError('Registration failed. Please try again.');
+      console.error('❌ Signup error:', error);
+      setError(error instanceof Error ? error.message : 'Registration failed. Please try again.');
     } finally {
       setLoading(false);
     }

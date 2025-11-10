@@ -110,7 +110,7 @@ interface UploadResult {
   file: File;
   url: string;
   error?: string;
-  uploadedBytes?: number; // Added missing property
+  uploadedBytes?: number;
 }
 
 // Enhanced types for ultra-fast upload system
@@ -354,7 +354,7 @@ export const storageService = {
   uploadFileWithDetailedProgress: async (
     file: File,
     path: string,
-    onProgress?: (progress: number, uploadedBytes: number, speed: number) => void, // Made optional
+    onProgress?: (progress: number, uploadedBytes: number, speed: number) => void,
     metadata?: Record<string, string>
   ): Promise<{ url?: string; error?: string }> => {
     console.group(`🚀 ULTRA-FAST Upload: ${file.name}`);
@@ -460,7 +460,7 @@ export const storageService = {
     basePath: string, 
     onProgress?: (overallProgress: number, uploadedBytes: number, averageSpeed: number, activeConnections: number) => void,
     metadata?: Record<string, string>,
-    maxConcurrent: number = 6 // Increased concurrency for ultra-fast uploads
+    maxConcurrent: number = 6
   ): Promise<UploadResult[]> => {
     console.group(`🚀 ULTRA-FAST Parallel Upload`);
     console.log(`📁 Total files: ${files.length}`);
@@ -474,9 +474,6 @@ export const storageService = {
     let totalSize = files.reduce((sum, file) => sum + file.size, 0);
     let activeUploads = 0;
     let startTime = Date.now();
-
-    // Track upload tasks for speed calculation
-    const uploadTasks: UploadTaskWithProgress[] = [];
 
     const updateOverallProgress = () => {
       const overallProgress = (completedCount / files.length) * 100;
@@ -510,7 +507,6 @@ export const storageService = {
             file,
             filePath,
             (progress, uploadedBytes, speed) => {
-              // Update individual file progress
               totalUploadedBytes += (uploadedBytes - (results[globalIndex]?.uploadedBytes || 0));
               updateOverallProgress();
             },
@@ -665,21 +661,6 @@ export const storageService = {
     }
   },
 
-  // ULTRA-FAST: Resume upload functionality (basic implementation)
-  resumeUpload: async (
-    file: File,
-    path: string,
-    existingTask?: UploadTask,
-    onProgress?: (progress: number, uploadedBytes: number, speed: number) => void,
-    metadata?: Record<string, string>
-  ): Promise<{ url?: string; error?: string }> => {
-    console.log(`🔄 Attempting to resume upload: ${file.name}`);
-    
-    // For now, we'll restart the upload. In a production app, you'd implement proper resume logic
-    // by storing upload tasks and their states in IndexedDB or localStorage
-    return storageService.uploadFileWithDetailedProgress(file, path, onProgress, metadata);
-  },
-
   // Test function to verify storage connectivity
   testConnection: async (): Promise<boolean> => {
     try {
@@ -695,49 +676,6 @@ export const storageService = {
     } catch (error) {
       console.error('❌ Storage connection test failed:', error);
       return false;
-    }
-  },
-
-  // ULTRA-FAST: Performance testing utility
-  testUploadPerformance: async (file: File, path: string): Promise<{ speed: number; time: number; success: boolean }> => {
-    console.group('🧪 Upload Performance Test');
-    
-    const startTime = Date.now();
-    let totalBytes = 0;
-    let lastTime = startTime;
-    
-    try {
-      const result = await storageService.uploadFileWithDetailedProgress(
-        file,
-        path,
-        (progress, uploadedBytes, speed) => {
-          totalBytes = uploadedBytes;
-          lastTime = Date.now();
-        }
-      );
-      
-      const totalTime = (lastTime - startTime) / 1000;
-      const averageSpeed = totalTime > 0 ? totalBytes / totalTime : 0;
-      
-      console.log(`📊 Performance Results:`);
-      console.log(`⏱️  Time: ${totalTime.toFixed(2)}s`);
-      console.log(`⚡ Speed: ${(averageSpeed / 1024 / 1024).toFixed(2)} MB/s`);
-      console.log(`✅ Success: ${!!result.url}`);
-      console.groupEnd();
-      
-      return {
-        speed: averageSpeed,
-        time: totalTime,
-        success: !!result.url
-      };
-    } catch (error) {
-      console.error('❌ Performance test failed:', error);
-      console.groupEnd();
-      return {
-        speed: 0,
-        time: 0,
-        success: false
-      };
     }
   }
 };
@@ -772,9 +710,169 @@ export const authService = {
   onAuthStateChanged: (callback: (user: User | null) => void) => {
     if (!auth) {
       console.warn('Firebase Auth is not initialized');
-      return () => {}; // Return empty unsubscribe function
+      return () => {};
     }
     return onAuthStateChanged(auth, callback);
+  }
+};
+
+// User Authentication Services
+export const userService = {
+  // Create new user in Firestore
+  createUser: async (userData: any): Promise<void> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      await firestore.create('users', userData);
+      console.log('✅ User created in Firestore:', userData.email);
+    } catch (error) {
+      console.error('❌ Error creating user in Firestore:', error);
+      throw new Error('Failed to create user account');
+    }
+  },
+
+  // Find user by email
+  findUserByEmail: async (email: string): Promise<any> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      const users = await firestore.query('users', [
+        where('email', '==', email)
+      ]);
+      return users.length > 0 ? users[0] : null;
+    } catch (error) {
+      console.error('❌ Error finding user by email:', error);
+      throw new Error('Failed to find user');
+    }
+  },
+
+  // Find user by username
+  findUserByUsername: async (username: string): Promise<any> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      const users = await firestore.query('users', [
+        where('username', '==', username)
+      ]);
+      return users.length > 0 ? users[0] : null;
+    } catch (error) {
+      console.error('❌ Error finding user by username:', error);
+      throw new Error('Failed to find user');
+    }
+  },
+
+  // Verify user credentials
+  verifyCredentials: async (email: string, password: string): Promise<any> => {
+    try {
+      const user = await userService.findUserByEmail(email);
+      
+      if (!user) {
+        throw new Error('Invalid email or password');
+      }
+
+      if (user.password !== password) {
+        throw new Error('Invalid email or password');
+      }
+
+      // Return user without password for security
+      const { password: _, ...userWithoutPassword } = user;
+      return userWithoutPassword;
+    } catch (error) {
+      console.error('❌ Credential verification failed:', error);
+      throw error;
+    }
+  },
+
+  // Update user profile
+  updateUserProfile: async (userId: string, updates: any): Promise<boolean> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      await firestore.update('users', userId, {
+        ...updates,
+        updatedAt: new Date().toISOString()
+      });
+      console.log('✅ User profile updated in Firestore:', userId);
+      return true;
+    } catch (error) {
+      console.error('❌ Error updating user profile:', error);
+      return false;
+    }
+  },
+
+  // Get user by ID
+  getUserById: async (userId: string): Promise<any> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      return await firestore.get('users', userId);
+    } catch (error) {
+      console.error('❌ Error getting user by ID:', error);
+      return null;
+    }
+  },
+
+  // Upload profile picture
+  uploadProfilePicture: async (userId: string, file: File): Promise<string> => {
+    try {
+      const path = `users/${userId}/profile-picture/${Date.now()}_${file.name}`;
+      const result = await storageService.uploadFile(file, path);
+      return result;
+    } catch (error) {
+      console.error('❌ Error uploading profile picture:', error);
+      throw new Error('Failed to upload profile picture');
+    }
+  },
+
+  // Update user profile with picture
+  updateProfileWithPicture: async (userId: string, updates: any, profilePicture?: File): Promise<boolean> => {
+    try {
+      let profilePictureUrl = updates.profilePicture;
+      
+      // Upload new profile picture if provided
+      if (profilePicture) {
+        profilePictureUrl = await userService.uploadProfilePicture(userId, profilePicture);
+      }
+      
+      // Update user in Firestore
+      const success = await userService.updateUserProfile(userId, {
+        ...updates,
+        profilePicture: profilePictureUrl,
+        profile: {
+          ...updates.profile,
+          profilePicture: profilePictureUrl
+        }
+      });
+      
+      return success;
+    } catch (error) {
+      console.error('❌ Error updating profile with picture:', error);
+      return false;
+    }
+  },
+
+  // Get all users (for admin purposes)
+  getAllUsers: async (): Promise<any[]> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      return await firestore.query('users');
+    } catch (error) {
+      console.error('❌ Error getting all users:', error);
+      return [];
+    }
   }
 };
 

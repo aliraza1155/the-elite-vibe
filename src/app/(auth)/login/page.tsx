@@ -5,14 +5,20 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { PrimaryButton } from '@/components/ui';
 import { validateEmail } from '@/lib/utils';
+import { userService } from '@/lib/firebase';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   
   const router = useRouter();
+
+  const togglePasswordVisibility = () => {
+    setShowPassword(!showPassword);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,18 +38,20 @@ export default function LoginPage() {
     }
 
     try {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      console.log('🔍 Attempting login for:', email);
       
-      const users = JSON.parse(localStorage.getItem('users') || '[]');
-      const user = users.find((u: any) => u.email === email && u.password === password);
+      // Verify credentials using Firestore
+      const user = await userService.verifyCredentials(email, password);
       
       if (!user) {
         throw new Error('Invalid email or password');
       }
+
+      // Save to session
+      localStorage.setItem('currentUser', JSON.stringify(user));
+      console.log('✅ User session created');
       
-      const { password: _, ...userWithoutPassword } = user;
-      localStorage.setItem('currentUser', JSON.stringify(userWithoutPassword));
-      
+      // Redirect based on role
       if (user.role === 'seller' || user.role === 'both') {
         router.push('/seller');
       } else {
@@ -51,6 +59,7 @@ export default function LoginPage() {
       }
       
     } catch (error: any) {
+      console.error('❌ Login error:', error);
       setError(error.message || 'Failed to sign in. Please check your credentials.');
     } finally {
       setLoading(false);
@@ -143,20 +152,30 @@ export default function LoginPage() {
                   <input
                     id="password"
                     name="password"
-                    type="password"
+                    type={showPassword ? "text" : "password"}
                     autoComplete="current-password"
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="block w-full px-4 py-3 bg-slate-700/50 border border-slate-600/50 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all duration-200 backdrop-blur-sm"
+                    className="block w-full px-4 py-3 bg-slate-700/50 border border-slate-600/50 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all duration-200 backdrop-blur-sm pr-10"
                     placeholder="Enter your password"
                   />
-                  <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
-                    <svg className="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                    </svg>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={togglePasswordVisibility}
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-300 transition-colors duration-200"
+                  >
+                    {showPassword ? (
+                      <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                      </svg>
+                    ) : (
+                      <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                    )}
+                  </button>
                 </div>
               </div>
 
@@ -175,9 +194,9 @@ export default function LoginPage() {
                 </div>
 
                 <div className="text-sm">
-                  <a href="#" className="font-medium text-cyan-400 hover:text-cyan-300 transition-colors duration-200">
+                  <Link href="/forgot-password" className="font-medium text-cyan-400 hover:text-cyan-300 transition-colors duration-200">
                     Forgot your password?
-                  </a>
+                  </Link>
                 </div>
               </div>
 

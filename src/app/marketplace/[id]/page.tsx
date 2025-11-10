@@ -117,10 +117,24 @@ export default function ModelDetailsPage() {
     setLoading(false);
   };
 
-  const trackView = (modelId: string) => {
+  const trackView = async (modelId: string) => {
     try {
-      const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
-      const updatedModels = allModels.map((m: AIModel) =>
+      // Update in Firestore
+      const allModels = await firestore.query('aiModels');
+      const modelToUpdate = allModels.find((m: any) => m.id === modelId);
+      
+      if (modelToUpdate) {
+        await firestore.update('aiModels', modelId, {
+          stats: {
+            ...modelToUpdate.stats,
+            views: (modelToUpdate.stats.views || 0) + 1
+          }
+        });
+      }
+      
+      // Also update localStorage
+      const localModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      const updatedModels = localModels.map((m: AIModel) =>
         m.id === modelId ? { ...m, stats: { ...m.stats, views: m.stats.views + 1 } } : m
       );
       localStorage.setItem('aiModels', JSON.stringify(updatedModels));
@@ -133,41 +147,64 @@ export default function ModelDetailsPage() {
     }
   };
 
-  const handleLike = () => {
+  const handleLike = async () => {
     if (!model || !currentUser) {
       router.push('/login');
       return;
     }
 
     try {
-      const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
-      const userLikes = JSON.parse(localStorage.getItem('userLikes') || '{}');
-      
       if (isLiked) {
+        // Update in Firestore
+        await firestore.update('aiModels', model.id, {
+          stats: {
+            ...model.stats,
+            likes: Math.max(0, model.stats.likes - 1)
+          }
+        });
+        
+        // Update localStorage
+        const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
         const updatedModels = allModels.map((m: AIModel) =>
           m.id === model.id ? { ...m, stats: { ...m.stats, likes: Math.max(0, m.stats.likes - 1) } } : m
         );
         localStorage.setItem('aiModels', JSON.stringify(updatedModels));
+        
+        const userLikes = JSON.parse(localStorage.getItem('userLikes') || '{}');
         delete userLikes[model.id];
+        localStorage.setItem('userLikes', JSON.stringify(userLikes));
+        
         setIsLiked(false);
         
         if (model) {
           setModel(prev => prev ? { ...prev, stats: { ...prev.stats, likes: Math.max(0, prev.stats.likes - 1) } } : null);
         }
       } else {
+        // Update in Firestore
+        await firestore.update('aiModels', model.id, {
+          stats: {
+            ...model.stats,
+            likes: model.stats.likes + 1
+          }
+        });
+        
+        // Update localStorage
+        const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
         const updatedModels = allModels.map((m: AIModel) =>
           m.id === model.id ? { ...m, stats: { ...m.stats, likes: m.stats.likes + 1 } } : m
         );
         localStorage.setItem('aiModels', JSON.stringify(updatedModels));
+        
+        const userLikes = JSON.parse(localStorage.getItem('userLikes') || '{}');
         userLikes[model.id] = true;
+        localStorage.setItem('userLikes', JSON.stringify(userLikes));
+        
         setIsLiked(true);
         
         if (model) {
           setModel(prev => prev ? { ...prev, stats: { ...prev.stats, likes: prev.stats.likes + 1 } } : null);
         }
       }
-      
-      localStorage.setItem('userLikes', JSON.stringify(userLikes));
     } catch (error) {
       console.error('Error handling like:', error);
     }

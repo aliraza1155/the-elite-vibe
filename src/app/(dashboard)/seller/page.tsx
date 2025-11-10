@@ -7,6 +7,8 @@ import Link from 'next/link';
 import { PaymentManager } from '@/lib/payment-utils';
 import { SubscriptionManager } from '@/lib/subscription-utils';
 import { AuthGuard } from '@/components/auth-guard';
+import { firestore } from '@/lib/firebase';
+import { where } from 'firebase/firestore';
 
 interface AIModel {
   id: string;
@@ -86,6 +88,7 @@ export default function SellerDashboard() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'models' | 'sales' | 'analytics'>('models');
   const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionCheckResult | null>(null);
+  const [approvingModelId, setApprovingModelId] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -132,12 +135,45 @@ export default function SellerDashboard() {
     }
   };
 
-  const loadSellerData = (userId: string) => {
+  const loadSellerData = async (userId: string) => {
     try {
-      const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
-      const userModels = allModels.filter((model: AIModel) => model.owner === userId);
-      setUserModels(userModels);
+      console.log('🔄 Loading seller data from Firestore...');
+      
+      // Load user models from Firestore with proper query
+      const userModels = await firestore.query('aiModels', [
+        where('owner', '==', userId)
+      ]);
+      
+      console.log('✅ Loaded user models from Firestore:', userModels.length);
+      
+      // Convert to AIModel type
+      const formattedModels: AIModel[] = userModels.map((model: any) => ({
+        id: model.id,
+        name: model.name || '',
+        niche: model.niche || '',
+        description: model.description || '',
+        status: model.status || 'pending',
+        price: model.price || 0,
+        owner: model.owner || '',
+        ownerName: model.ownerName || '',
+        media: model.media || {
+          sfwImages: [],
+          nsfwImages: [],
+          sfwVideos: [],
+          nsfwVideos: []
+        },
+        stats: model.stats || {
+          views: 0,
+          likes: 0,
+          downloads: 0,
+          rating: 0
+        },
+        createdAt: model.createdAt || new Date().toISOString()
+      }));
+      
+      setUserModels(formattedModels);
 
+      // Load earnings data
       const earnings = PaymentManager.getSellerEarnings(userId);
       setEarnings({
         total: earnings.totalRevenue,
@@ -146,7 +182,8 @@ export default function SellerDashboard() {
         paidOut: earnings.totalPayouts
       });
 
-      const sales = earnings.transactions.map(transaction => ({
+      // Load sales data
+      const salesData = earnings.transactions.map(transaction => ({
         id: transaction.id,
         modelId: transaction.modelId,
         modelName: transaction.modelName,
@@ -158,12 +195,11 @@ export default function SellerDashboard() {
         commissionRate: transaction.commissionRate
       }));
 
-      setSales(sales);
-      calculateEarnings(userModels, sales);
+      setSales(salesData);
+      calculateEarnings(formattedModels, salesData);
     } catch (error) {
-      console.error('Error loading seller data:', error);
-      setUserModels([]);
-      setSales([]);
+      console.error('❌ Error loading seller data from Firestore:', error);
+      alert('Error loading your data. Please refresh the page.');
     } finally {
       setLoading(false);
     }
@@ -219,48 +255,120 @@ export default function SellerDashboard() {
   };
 
   const handleApproveModel = async (modelId: string) => {
-    if (!currentUser) return;
-
-    const approvalCheck = PaymentManager.canUserApproveModel(currentUser, modelId);
-    
-    if (!approvalCheck.canApprove) {
-      const userConfirmed = window.confirm(
-        `${approvalCheck.reason}\n\nClick OK to view our pricing plans and subscribe.`
-      );
-      
-      if (userConfirmed) {
-        router.push('/pricing');
-      }
+    if (!currentUser) {
+      alert('❌ No user found. Please log in again.');
       return;
     }
 
+    console.log('🔄 Starting model approval process for:', modelId);
+    console.log('👤 Current user:', currentUser.id);
+    
+    setApprovingModelId(modelId);
+
     try {
-      const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
-      const updatedModels = allModels.map((model: AIModel) =>
-        model.id === modelId ? { ...model, status: 'approved' as const } : model
-      );
-      localStorage.setItem('aiModels', JSON.stringify(updatedModels));
+      // First check if model exists in Firestore
+      console.log('🔍 Checking if model exists in Firestore...');
+      const model = await firestore.get('aiModels', modelId);
       
+      if (!model) {
+        throw new Error('Model not found in database. It may have been deleted.');
+      }
+
+      console.log('✅ Model found:', model.name);
+
+      // Check subscription status
+      const approvalCheck = PaymentManager.canUserApproveModel(currentUser, modelId);
+      console.log('📋 Approval check result:', approvalCheck);
+      
+      if (!approvalCheck.canApprove) {
+        const userConfirmed = window.confirm(
+          `${approvalCheck.reason}\n\nClick OK to view our pricing plans and subscribe.`
+        );
+        
+        if (userConfirmed) {
+          router.push('/pricing');
+        }
+        setApprovingModelId(null);
+        return;
+      }
+
+      console.log('✅ Subscription check passed, proceeding with approval...');
+
+      // ✅ Update in Firestore
+      console.log('🔥 Updating model status to approved in Firestore...');
+      await firestore.update('aiModels', modelId, { 
+        status: 'approved',
+        updatedAt: new Date().toISOString()
+      });
+      
+      console.log('✅ Model approved in Firestore');
+
+      // ✅ Update UI state
       setUserModels(prev => prev.map(m => 
         m.id === modelId ? { ...m, status: 'approved' } : m
       ));
       
+      // ✅ Refresh subscription status
       checkSubscriptionStatus(currentUser);
       
+      console.log('🎉 Model approval completed successfully!');
       alert('✅ Model approved and listed in marketplace successfully!');
       
-    } catch (error) {
-      console.error('Error approving model:', error);
-      alert('❌ Error approving model. Please try again.');
+    } catch (error: any) {
+      console.error('❌ Error approving model:', error);
+      
+      // Provide specific error messages
+      let errorMessage = 'Error approving model. Please try again.';
+      
+      if (error.message?.includes('No document to update') || error.message?.includes('Model not found')) {
+        errorMessage = 'Model not found in database. It may have been deleted. Please refresh the page.';
+        // Refresh the data to remove the missing model
+        loadSellerData(currentUser.id);
+      } else if (error.message?.includes('permission') || error.message?.includes('not authorized')) {
+        errorMessage = 'You do not have permission to approve this model. Please check your subscription status.';
+      } else if (error.message?.includes('network') || error.message?.includes('offline')) {
+        errorMessage = 'Network error. Please check your internet connection and try again.';
+      }
+      
+      alert(`❌ ${errorMessage}`);
+    } finally {
+      setApprovingModelId(null);
     }
   };
 
-  const deleteModel = (modelId: string) => {
-    if (confirm('Are you sure you want to delete this model? This action cannot be undone.')) {
-      const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
-      const updatedModels = allModels.filter((model: AIModel) => model.id !== modelId);
-      localStorage.setItem('aiModels', JSON.stringify(updatedModels));
+  const deleteModel = async (modelId: string) => {
+    if (!confirm('Are you sure you want to delete this model? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      // First check if model exists
+      const model = await firestore.get('aiModels', modelId);
+      if (!model) {
+        alert('Model not found. It may have already been deleted.');
+        // Refresh data to remove the missing model
+        loadSellerData(currentUser.id);
+        return;
+      }
+
+      // ✅ Delete from Firestore
+      await firestore.delete('aiModels', modelId);
+      console.log('✅ Model deleted from Firestore');
+      
+      // Refresh data to get updated list
       loadSellerData(currentUser.id);
+      
+      alert('✅ Model deleted successfully!');
+    } catch (error: any) {
+      console.error('❌ Error deleting model:', error);
+      
+      let errorMessage = 'Error deleting model. Please try again.';
+      if (error.message?.includes('No document to delete') || error.message?.includes('not found')) {
+        errorMessage = 'Model not found. It may have already been deleted.';
+        loadSellerData(currentUser.id);
+      }
+      
+      alert(`❌ ${errorMessage}`);
     }
   };
 
@@ -674,14 +782,25 @@ export default function SellerDashboard() {
                             {model.status === 'pending' && (
                               <button
                                 onClick={() => handleApproveModel(model.id)}
-                                disabled={!subscriptionStatus?.canListModels}
+                                disabled={!subscriptionStatus?.canListModels || approvingModelId === model.id}
                                 className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all duration-200 ${
                                   subscriptionStatus?.canListModels
-                                    ? 'bg-gradient-to-r from-emerald-500 to-green-500 text-white hover:from-emerald-600 hover:to-green-600 shadow-lg shadow-emerald-500/25'
+                                    ? approvingModelId === model.id
+                                      ? 'bg-amber-500/50 text-amber-200 cursor-not-allowed'
+                                      : 'bg-gradient-to-r from-emerald-500 to-green-500 text-white hover:from-emerald-600 hover:to-green-600 shadow-lg shadow-emerald-500/25'
                                     : 'bg-slate-600/50 text-slate-400 cursor-not-allowed'
                                 }`}
                               >
-                                {subscriptionStatus?.canListModels ? 'Approve' : 'Need Subscription'}
+                                {approvingModelId === model.id ? (
+                                  <span className="flex items-center justify-center">
+                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                                    Approving...
+                                  </span>
+                                ) : subscriptionStatus?.canListModels ? (
+                                  'Approve'
+                                ) : (
+                                  'Need Subscription'
+                                )}
                               </button>
                             )}
                             
