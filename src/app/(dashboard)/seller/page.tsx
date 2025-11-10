@@ -146,9 +146,9 @@ export default function SellerDashboard() {
       
       console.log('✅ Loaded user models from Firestore:', userModels.length);
       
-      // Convert to AIModel type
+      // Convert to AIModel type - include the Firestore document ID
       const formattedModels: AIModel[] = userModels.map((model: any) => ({
-        id: model.id,
+        id: model.id, // This is the Firestore document ID
         name: model.name || '',
         niche: model.niche || '',
         description: model.description || '',
@@ -266,7 +266,7 @@ export default function SellerDashboard() {
     setApprovingModelId(modelId);
 
     try {
-      // First check if model exists in Firestore
+      // First check if model exists in Firestore using the Firestore document ID
       console.log('🔍 Checking if model exists in Firestore...');
       const model = await firestore.get('aiModels', modelId);
       
@@ -294,7 +294,7 @@ export default function SellerDashboard() {
 
       console.log('✅ Subscription check passed, proceeding with approval...');
 
-      // ✅ Update in Firestore
+      // ✅ Update in Firestore using the Firestore document ID
       console.log('🔥 Updating model status to approved in Firestore...');
       await firestore.update('aiModels', modelId, { 
         status: 'approved',
@@ -342,7 +342,7 @@ export default function SellerDashboard() {
     }
 
     try {
-      // First check if model exists
+      // First check if model exists using the Firestore document ID
       const model = await firestore.get('aiModels', modelId);
       if (!model) {
         alert('Model not found. It may have already been deleted.');
@@ -351,7 +351,7 @@ export default function SellerDashboard() {
         return;
       }
 
-      // ✅ Delete from Firestore
+      // ✅ Delete from Firestore using the Firestore document ID
       await firestore.delete('aiModels', modelId);
       console.log('✅ Model deleted from Firestore');
       
