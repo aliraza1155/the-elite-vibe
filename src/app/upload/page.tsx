@@ -1,10 +1,12 @@
+// app/upload/page.tsx
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Header, Footer } from '@/components/layout';
 import { PrimaryButton } from '@/components/ui';
-import { storageService, firestore } from '@/lib/firebase';
+import { storageService } from '@/lib/firebase';
+import { unifiedFirestore } from '@/lib/firebase-unified';
 import { AuthGuard } from '@/components/auth-guard';
 
 // Enhanced interfaces
@@ -539,7 +541,7 @@ export default function UltraFastUploadPage() {
     description: '',
     framework: '',
     modelSize: '',
-    price: '50' // Default to minimum price
+    price: '50'
   });
 
   const router = useRouter();
@@ -673,31 +675,30 @@ export default function UltraFastUploadPage() {
     return { isValid: errors.length === 0, errors };
   };
 
-  const startUltraFastUpload = async (modelId: string, userId: string, enableBackground: boolean = false): Promise<any> => {
+  const startUltraFastUpload = async (userId: string, enableBackground: boolean = false): Promise<any> => {
     return new Promise((resolve) => {
       // Create background session if enabled
       if (enableBackground && backgroundManagerRef.current) {
-        const session = backgroundManagerRef.current.createSession(modelId, userId, modelDetails);
+        const session = backgroundManagerRef.current.createSession('pending', userId, modelDetails);
         uploadManager.setBackgroundSession(session.id);
         loadBackgroundSessions();
       }
 
       // Add all files to upload manager
-      uploadManager.addJobs(files.sfwImages, 'sfw-images', `models/${modelId}/sfw/images`, modelId, userId);
-      uploadManager.addJobs(files.nsfwImages, 'nsfw-images', `models/${modelId}/nsfw/images`, modelId, userId);
-      uploadManager.addJobs(files.sfwVideos, 'sfw-videos', `models/${modelId}/sfw/videos`, modelId, userId);
-      uploadManager.addJobs(files.nsfwVideos, 'nsfw-videos', `models/${modelId}/nsfw/videos`, modelId, userId);
+      uploadManager.addJobs(files.sfwImages, 'sfw-images', `models/pending/sfw/images`, 'pending', userId);
+      uploadManager.addJobs(files.nsfwImages, 'nsfw-images', `models/pending/nsfw/images`, 'pending', userId);
+      uploadManager.addJobs(files.sfwVideos, 'sfw-videos', `models/pending/sfw/videos`, 'pending', userId);
+      uploadManager.addJobs(files.nsfwVideos, 'nsfw-videos', `models/pending/nsfw/videos`, 'pending', userId);
 
       // Set up completion callback
       uploadManager.onComplete(resolve);
     });
   };
 
-  const createModelInDatabase = async (modelId: string, modelData: any, uploadResults: any, userId: string) => {
-    console.log('🔄 Creating model in Firestore database...');
+  const createModelInDatabase = async (modelData: any, uploadResults: any, userId: string) => {
+    console.log('🔄 Creating model with unified ID system...');
     
     const modelRecord = {
-      id: modelId,
       name: modelData.name,
       niche: modelData.niche,
       description: modelData.description,
@@ -718,21 +719,19 @@ export default function UltraFastUploadPage() {
         likes: 0,
         downloads: 0,
         rating: 0,
-      },
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      }
     };
 
     try {
-      console.log('📝 Saving model to Firestore:', modelId);
+      console.log('📝 Saving model with unified ID system...');
       
-      // ✅ Save to Firebase Firestore
-      await firestore.create('aiModels', modelRecord);
-      console.log('✅ Model successfully saved to Firestore');
+      // Use unified firestore service
+      const result = await unifiedFirestore.createModel(modelRecord);
       
-      return modelRecord;
+      console.log('✅ Model successfully saved with unified ID:', result.id);
+      return result;
     } catch (error) {
-      console.error('❌ Error saving model to Firestore:', error);
+      console.error('❌ Error saving model:', error);
       throw new Error('Failed to save model to database. Please try again.');
     }
   };
@@ -751,8 +750,8 @@ export default function UltraFastUploadPage() {
         return;
       }
 
-      const modelId = `model_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      
+      console.log('🚀 Starting ultra-fast upload process with unified IDs...');
+
       // Ask user if they want background upload
       const enableBackground = window.confirm(
         '🚀 Enable Background Upload?\n\n' +
@@ -762,30 +761,24 @@ export default function UltraFastUploadPage() {
         'Click OK for background upload, Cancel for normal upload.'
       );
 
-      console.log('🚀 Starting ultra-fast upload process...');
-      console.log('📁 Model ID:', modelId);
-      console.log('👤 User ID:', currentUser.id);
-      console.log('📊 Total files:', files.totalFiles);
-      console.log('💾 Estimated size:', formatFileSize(files.totalSize));
-
       // Start ultra-fast upload
-      const uploadResults = await startUltraFastUpload(modelId, currentUser.id, enableBackground);
+      const uploadResults = await startUltraFastUpload(currentUser.id, enableBackground);
       
-      if (uploadResults.errors.length > 0) {
+      if (uploadResults.errors && uploadResults.errors.length > 0) {
         console.error('❌ Some uploads failed:', uploadResults.errors);
         setError(`Some uploads failed: ${uploadResults.errors.slice(0, 3).join(', ')}`);
         return;
       }
 
       console.log('✅ All files uploaded successfully');
-      console.log('📝 Creating model record in database...');
+      console.log('📝 Creating model record with unified ID system...');
 
-      // Create model record in Firestore
-      await createModelInDatabase(modelId, modelDetails, uploadResults, currentUser.id);
+      // Create model record with unified IDs
+      const modelResult = await createModelInDatabase(modelDetails, uploadResults, currentUser.id);
 
       const successMsg = enableBackground 
-        ? '🎉 Upload started in background! You can close this tab and check progress in your dashboard.'
-        : '🎉 Model uploaded successfully! Redirecting to dashboard...';
+        ? `🎉 Upload started in background! Model ID: ${modelResult.id}`
+        : `🎉 Model uploaded successfully! ID: ${modelResult.id}. Redirecting to dashboard...`;
       
       setSuccess(successMsg);
       
@@ -841,7 +834,6 @@ export default function UltraFastUploadPage() {
       if (uploadManagerRef.current) {
         const session = backgroundManagerRef.current?.getSession(sessionId);
         if (session) {
-          // Implement session resumption logic here
           console.log('Resuming session:', sessionId);
         }
       }

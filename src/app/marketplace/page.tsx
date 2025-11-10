@@ -1,3 +1,4 @@
+// app/marketplace/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -6,7 +7,7 @@ import { Header, Footer } from '@/components/layout';
 import { PrimaryButton } from '@/components/ui';
 import Link from 'next/link';
 import { PaymentManager } from '@/lib/payment-utils';
-import { firestore } from '@/lib/firebase';
+import { unifiedFirestore } from '@/lib/firebase-unified';
 
 interface AIModel {
   id: string;
@@ -60,27 +61,23 @@ export default function MarketplacePage() {
 
   const loadModels = async () => {
     try {
-      console.log('🔄 Loading models from Firestore...');
+      console.log('🔄 Loading models with unified ID system...');
       
-      // Try to load from Firestore first
-      const firestoreModels = await firestore.query('aiModels');
-      console.log('✅ Loaded from Firestore:', firestoreModels.length, 'models');
+      // Use unified system to get approved models
+      const approvedModels = await unifiedFirestore.getApprovedModels();
       
-      // Convert FirestoreDocument to AIModel and filter
-      const approvedModels = firestoreModels
-        .filter((model: any) => model.status === 'approved')
-        .map((model: any) => model as AIModel);
+      console.log('✅ Loaded approved models:', approvedModels.length);
       
       const activeModels = getActiveModels(approvedModels);
-      
-      // Update localStorage with Firestore data for offline access
-      localStorage.setItem('aiModels', JSON.stringify(firestoreModels));
-      
       setModels(activeModels);
-    } catch (error) {
-      console.error('❌ Error loading from Firestore, falling back to localStorage:', error);
+
+      // Update localStorage for offline access
+      localStorage.setItem('aiModels', JSON.stringify(approvedModels));
       
-      // Fallback to localStorage if Firestore fails
+    } catch (error) {
+      console.error('❌ Error loading from unified system:', error);
+      
+      // Fallback to localStorage
       const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
       const approvedModels = allModels.filter((model: AIModel) => model.status === 'approved');
       const activeModels = getActiveModels(approvedModels);

@@ -1,3 +1,4 @@
+// app/seller/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -7,12 +8,10 @@ import Link from 'next/link';
 import { PaymentManager } from '@/lib/payment-utils';
 import { SubscriptionManager } from '@/lib/subscription-utils';
 import { AuthGuard } from '@/components/auth-guard';
-import { firestore } from '@/lib/firebase';
-import { where } from 'firebase/firestore';
+import { unifiedFirestore } from '@/lib/firebase-unified';
 
 interface AIModel {
-  id: string; // This will be the Firestore document ID
-  customId?: string; // Your custom ID from the upload
+  id: string;
   name: string;
   niche: string;
   description: string;
@@ -138,19 +137,15 @@ export default function SellerDashboard() {
 
   const loadSellerData = async (userId: string) => {
     try {
-      console.log('🔄 Loading seller data from Firestore...');
+      console.log('🔄 Loading seller data with unified ID system...');
       
-      // Load user models from Firestore with proper query
-      const userModels = await firestore.query('aiModels', [
-        where('owner', '==', userId)
-      ]);
+      // Load user models using unified system
+      const userModels = await unifiedFirestore.getUserModels(userId);
       
-      console.log('✅ Loaded user models from Firestore:', userModels.length);
+      console.log('✅ Loaded user models:', userModels.length);
       
-      // Convert to AIModel type - include both Firestore ID and custom ID
       const formattedModels: AIModel[] = userModels.map((model: any) => ({
-        id: model.id, // Firestore document ID
-        customId: model.id, // Your custom ID field (if it exists)
+        id: model.id, // This is the unified ID
         name: model.name || '',
         niche: model.niche || '',
         description: model.description || '',
@@ -200,7 +195,7 @@ export default function SellerDashboard() {
       setSales(salesData);
       calculateEarnings(formattedModels, salesData);
     } catch (error) {
-      console.error('❌ Error loading seller data from Firestore:', error);
+      console.error('❌ Error loading seller data:', error);
       alert('Error loading your data. Please refresh the page.');
     } finally {
       setLoading(false);
@@ -262,48 +257,18 @@ export default function SellerDashboard() {
       return;
     }
 
-    console.log('🔄 Starting model approval process for:', modelId);
-    console.log('👤 Current user:', currentUser.id);
-    
+    console.log('🔄 Starting model approval with unified ID:', modelId);
     setApprovingModelId(modelId);
 
     try {
-      // First, try to get the model directly by ID
-      console.log('🔍 Checking if model exists in Firestore with ID:', modelId);
-      let model = await firestore.get('aiModels', modelId);
+      // Get the model using unified system
+      const model = await unifiedFirestore.getModel(modelId);
       
       if (!model) {
-        console.log('❌ Model not found with direct ID lookup. Trying to find by query...');
-        
-        // If direct lookup fails, try to find by querying all user models
-        const allUserModels = await firestore.query('aiModels', [
-          where('owner', '==', currentUser.id)
-        ]);
-        
-        // Try to find the model by various ID fields
-        const foundModel = allUserModels.find((m: any) => 
-          m.id === modelId || 
-          m.customId === modelId || 
-          m.modelId === modelId
-        );
-        
-        if (foundModel) {
-          console.log('✅ Found model using query method:', foundModel.name);
-          model = foundModel;
-          // Use the Firestore document ID for the update
-          modelId = foundModel.id;
-        } else {
-          throw new Error(`Model not found in database. Searched with ID: ${modelId}`);
-        }
+        throw new Error(`Model not found: ${modelId}`);
       }
 
       console.log('✅ Model found:', model.name);
-      console.log('🔍 Model details:', {
-        firestoreId: model.id,
-        customId: model.customId,
-        name: model.name,
-        status: model.status
-      });
 
       // Check subscription status
       const approvalCheck = PaymentManager.canUserApproveModel(currentUser, modelId);
@@ -323,23 +288,21 @@ export default function SellerDashboard() {
 
       console.log('✅ Subscription check passed, proceeding with approval...');
 
-      // ✅ Update in Firestore using the correct ID
-      console.log('🔥 Updating model status to approved in Firestore...');
-      console.log('📝 Using Firestore ID for update:', modelId);
-      
-      await firestore.update('aiModels', modelId, { 
+      // Update using unified system
+      console.log('🔥 Updating model status to approved...');
+      await unifiedFirestore.updateModel(modelId, { 
         status: 'approved',
         updatedAt: new Date().toISOString()
       });
       
-      console.log('✅ Model approved in Firestore');
+      console.log('✅ Model approved successfully!');
 
-      // ✅ Update UI state
+      // Update UI state
       setUserModels(prev => prev.map(m => 
         m.id === modelId ? { ...m, status: 'approved' } : m
       ));
       
-      // ✅ Refresh subscription status
+      // Refresh subscription status
       checkSubscriptionStatus(currentUser);
       
       console.log('🎉 Model approval completed successfully!');
@@ -347,19 +310,14 @@ export default function SellerDashboard() {
       
     } catch (error: any) {
       console.error('❌ Error approving model:', error);
-      console.error('🔍 Error details:', error.message);
       
-      // Provide specific error messages
       let errorMessage = 'Error approving model. Please try again.';
       
-      if (error.message?.includes('No document to update') || error.message?.includes('Model not found')) {
-        errorMessage = 'Model not found in database. It may have been deleted. Please refresh the page.';
-        // Refresh the data to remove the missing model
+      if (error.message?.includes('not found')) {
+        errorMessage = 'Model not found in database. It may have been deleted.';
         loadSellerData(currentUser.id);
-      } else if (error.message?.includes('permission') || error.message?.includes('not authorized')) {
-        errorMessage = 'You do not have permission to approve this model. Please check your subscription status.';
-      } else if (error.message?.includes('network') || error.message?.includes('offline')) {
-        errorMessage = 'Network error. Please check your internet connection and try again.';
+      } else if (error.message?.includes('permission')) {
+        errorMessage = 'You do not have permission to approve this model.';
       }
       
       alert(`❌ ${errorMessage}`);
@@ -374,53 +332,21 @@ export default function SellerDashboard() {
     }
 
     try {
-      console.log('🗑️ Attempting to delete model:', modelId);
+      console.log('🗑️ Deleting model with unified ID:', modelId);
       
-      // First, try to get the model directly by ID
-      let model = await firestore.get('aiModels', modelId);
+      // Delete using unified system
+      await unifiedFirestore.deleteModel(modelId);
+      console.log('✅ Model deleted successfully!');
       
-      if (!model) {
-        console.log('❌ Model not found with direct ID lookup. Trying to find by query...');
-        
-        // If direct lookup fails, try to find by querying all user models
-        const allUserModels = await firestore.query('aiModels', [
-          where('owner', '==', currentUser.id)
-        ]);
-        
-        // Try to find the model by various ID fields
-        const foundModel = allUserModels.find((m: any) => 
-          m.id === modelId || 
-          m.customId === modelId || 
-          m.modelId === modelId
-        );
-        
-        if (foundModel) {
-          console.log('✅ Found model using query method:', foundModel.name);
-          model = foundModel;
-          // Use the Firestore document ID for deletion
-          modelId = foundModel.id;
-        } else {
-          alert('Model not found. It may have already been deleted.');
-          loadSellerData(currentUser.id);
-          return;
-        }
-      }
-
-      // ✅ Delete from Firestore using the correct ID
-      console.log('🔥 Deleting model from Firestore with ID:', modelId);
-      await firestore.delete('aiModels', modelId);
-      console.log('✅ Model deleted from Firestore');
-      
-      // Refresh data to get updated list
+      // Refresh data
       loadSellerData(currentUser.id);
       
       alert('✅ Model deleted successfully!');
     } catch (error: any) {
       console.error('❌ Error deleting model:', error);
-      console.error('🔍 Error details:', error.message);
       
       let errorMessage = 'Error deleting model. Please try again.';
-      if (error.message?.includes('No document to delete') || error.message?.includes('not found')) {
+      if (error.message?.includes('not found')) {
         errorMessage = 'Model not found. It may have already been deleted.';
         loadSellerData(currentUser.id);
       }
