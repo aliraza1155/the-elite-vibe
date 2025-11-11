@@ -1,7 +1,5 @@
 'use client';
 
-import { userService } from '@/lib/firebase';
-
 export interface Subscription {
   id: string;
   stripeSubscriptionId: string;
@@ -19,34 +17,24 @@ export interface Subscription {
 }
 
 export class SubscriptionManager {
-  // Get current user's active subscription from Firebase
-  static async getCurrentUserSubscription(): Promise<Subscription | null> {
+  // Get current user's active subscription
+  static getCurrentUserSubscription(): Subscription | null {
     try {
       const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
-      if (!currentUser?.id) return null;
-
-      const user = await userService.getUserById(currentUser.id);
-      return user?.subscription || null;
+      return currentUser?.subscription || null;
     } catch (error) {
-      console.error('Error getting user subscription from Firebase:', error);
+      console.error('Error getting user subscription:', error);
       return null;
     }
   }
 
-  // Check if user has active subscription using Firebase
-  static async hasActiveSubscription(user?: any): Promise<boolean> {
+  // Check if user has active subscription
+  static hasActiveSubscription(user?: any): boolean {
     try {
-      let targetUser = user;
-      if (!targetUser) {
-        targetUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
-      }
+      const targetUser = user || JSON.parse(localStorage.getItem('currentUser') || 'null');
+      if (!targetUser) return false;
 
-      if (!targetUser?.id) return false;
-
-      // Get fresh user data from Firebase
-      const freshUser = await userService.getUserById(targetUser.id);
-      const subscription = freshUser?.subscription;
-      
+      const subscription = targetUser.subscription;
       if (!subscription) return false;
 
       // Check if subscription is active and not expired
@@ -55,12 +43,12 @@ export class SubscriptionManager {
       
       return isActive && isNotExpired;
     } catch (error) {
-      console.error('Error checking subscription in Firebase:', error);
+      console.error('Error checking subscription:', error);
       return false;
     }
   }
 
-  // Get subscription features (unchanged)
+  // Get subscription features
   static getSubscriptionFeatures(planId: string) {
     const features: any = {
       seller_starter: {
@@ -107,115 +95,82 @@ export class SubscriptionManager {
     return features[planId] || features.seller_starter;
   }
 
-  // Get subscription tier name (unchanged)
+  // Get subscription tier name
   static getSubscriptionTierName(planId: string): string {
     const features = this.getSubscriptionFeatures(planId);
     return features.name || 'Free';
   }
 
-  // Get max models for plan (unchanged)
+  // Get max models for plan
   static getMaxModelsForPlan(planId: string): number {
     const features = this.getSubscriptionFeatures(planId);
     return features.maxModels || 0;
   }
 
-  // Update user subscription in Firebase
-  static async updateUserSubscription(userId: string, subscriptionData: Partial<Subscription>): Promise<boolean> {
+  // Update user subscription
+  static updateUserSubscription(userId: string, subscriptionData: Partial<Subscription>) {
     try {
-      // Get current user data
-      const user = await userService.getUserById(userId);
-      if (!user) return false;
+      const users = JSON.parse(localStorage.getItem('users') || '[]');
+      const userIndex = users.findIndex((u: any) => u.id === userId);
+      
+      if (userIndex !== -1) {
+        users[userIndex].subscription = {
+          ...users[userIndex].subscription,
+          ...subscriptionData,
+          updatedAt: new Date().toISOString()
+        };
+        users[userIndex].updatedAt = new Date().toISOString();
+        
+        localStorage.setItem('users', JSON.stringify(users));
 
-      // Merge subscription data
-      const updatedSubscription = {
-        ...user.subscription,
-        ...subscriptionData,
-        updatedAt: new Date().toISOString()
-      };
-
-      // Update user in Firebase
-      const success = await userService.updateUserProfile(userId, {
-        subscription: updatedSubscription,
-        updatedAt: new Date().toISOString()
-      });
-
-      if (success) {
-        // Update current user in localStorage
+        // Update current user if it's the same user
         const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
         if (currentUser && currentUser.id === userId) {
-          currentUser.subscription = updatedSubscription;
+          currentUser.subscription = users[userIndex].subscription;
           localStorage.setItem('currentUser', JSON.stringify(currentUser));
         }
-      }
 
-      return success;
+        return true;
+      }
+      return false;
     } catch (error) {
-      console.error('Error updating user subscription in Firebase:', error);
+      console.error('Error updating user subscription:', error);
       return false;
     }
   }
 
-  // Create new subscription in Firebase
-  static async createSubscription(userId: string, subscriptionData: Subscription): Promise<boolean> {
+  // Cancel subscription
+  static cancelSubscription(userId: string): boolean {
     try {
-      const success = await userService.updateUserProfile(userId, {
-        subscription: subscriptionData,
-        updatedAt: new Date().toISOString()
-      });
+      const users = JSON.parse(localStorage.getItem('users') || '[]');
+      const userIndex = users.findIndex((u: any) => u.id === userId);
+      
+      if (userIndex !== -1 && users[userIndex].subscription) {
+        users[userIndex].subscription.status = 'canceled';
+        users[userIndex].updatedAt = new Date().toISOString();
+        
+        localStorage.setItem('users', JSON.stringify(users));
 
-      if (success) {
-        // Update current user in localStorage
+        // Update current user if it's the same user
         const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
         if (currentUser && currentUser.id === userId) {
-          currentUser.subscription = subscriptionData;
+          currentUser.subscription = users[userIndex].subscription;
           localStorage.setItem('currentUser', JSON.stringify(currentUser));
         }
-      }
 
-      return success;
+        return true;
+      }
+      return false;
     } catch (error) {
-      console.error('Error creating subscription in Firebase:', error);
+      console.error('Error canceling subscription:', error);
       return false;
     }
   }
 
-  // Cancel subscription in Firebase
-  static async cancelSubscription(userId: string): Promise<boolean> {
+  // Get all active subscriptions (for admin purposes)
+  static getAllActiveSubscriptions(): Array<{userId: string, subscription: Subscription}> {
     try {
-      const user = await userService.getUserById(userId);
-      if (!user?.subscription) return false;
-
-      const updatedSubscription = {
-        ...user.subscription,
-        status: 'canceled',
-        updatedAt: new Date().toISOString()
-      };
-
-      const success = await userService.updateUserProfile(userId, {
-        subscription: updatedSubscription,
-        updatedAt: new Date().toISOString()
-      });
-
-      if (success) {
-        // Update current user in localStorage
-        const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
-        if (currentUser && currentUser.id === userId) {
-          currentUser.subscription = updatedSubscription;
-          localStorage.setItem('currentUser', JSON.stringify(currentUser));
-        }
-      }
-
-      return success;
-    } catch (error) {
-      console.error('Error canceling subscription in Firebase:', error);
-      return false;
-    }
-  }
-
-  // Get all active subscriptions from Firebase (for admin purposes)
-  static async getAllActiveSubscriptions(): Promise<Array<{userId: string, subscription: Subscription}>> {
-    try {
-      const users = await userService.getAllUsers();
+      const users = JSON.parse(localStorage.getItem('users') || '[]');
       const activeSubscriptions = users
         .filter((user: any) => user.subscription && user.subscription.status === 'active')
         .map((user: any) => ({
@@ -225,40 +180,31 @@ export class SubscriptionManager {
       
       return activeSubscriptions;
     } catch (error) {
-      console.error('Error getting active subscriptions from Firebase:', error);
+      console.error('Error getting active subscriptions:', error);
       return [];
     }
   }
 
-  // Check if user can list models based on subscription using Firebase
-  static async canUserListModels(user?: any): Promise<{ 
+  // Check if user can list models based on subscription
+  static canUserListModels(user?: any): { 
     canList: boolean; 
     reason?: string; 
     maxModels?: number; 
     currentModels?: number;
     subscriptionTier?: string;
-  }> {
+  } {
     try {
-      let targetUser = user;
-      if (!targetUser) {
-        targetUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
-      }
+      const targetUser = user || JSON.parse(localStorage.getItem('currentUser') || 'null');
       
       if (!targetUser) {
         return { canList: false, reason: 'User not found' };
       }
 
-      // Get fresh user data from Firebase
-      const freshUser = await userService.getUserById(targetUser.id);
-      if (!freshUser) {
-        return { canList: false, reason: 'User not found in database' };
-      }
-
-      if (freshUser.role !== 'seller' && freshUser.role !== 'both') {
+      if (targetUser.role !== 'seller' && targetUser.role !== 'both') {
         return { canList: false, reason: 'Seller account required to list models' };
       }
 
-      const hasActiveSub = await this.hasActiveSubscription(freshUser);
+      const hasActiveSub = this.hasActiveSubscription(targetUser);
       
       if (!hasActiveSub) {
         return { 
@@ -268,9 +214,9 @@ export class SubscriptionManager {
         };
       }
 
-      const subscription = freshUser.subscription;
+      const subscription = targetUser.subscription;
       const maxModels = this.getMaxModelsForPlan(subscription.planId);
-      const currentModels = await this.getUserApprovedModelsCount(freshUser.id);
+      const currentModels = this.getUserApprovedModelsCount(targetUser.id);
 
       if (maxModels !== -1 && currentModels >= maxModels) {
         return { 
@@ -295,50 +241,16 @@ export class SubscriptionManager {
     }
   }
 
-  // Helper method to get user's approved models count from Firebase
-  private static async getUserApprovedModelsCount(userId: string): Promise<number> {
+  // Helper method to get user's approved models count
+  private static getUserApprovedModelsCount(userId: string): number {
     try {
-      // This would need to be implemented in your Firebase service
-      // For now, we'll use a placeholder - you'll need to implement this based on your data structure
-      const { firestore } = require('@/lib/firebase');
-      const models = await firestore.query('aiModels', [
-        { field: 'owner', operator: '==', value: userId },
-        { field: 'status', operator: '==', value: 'approved' }
-      ]);
-      
-      return models.length;
+      const models = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      return models.filter((model: any) => 
+        model.owner === userId && model.status === 'approved'
+      ).length;
     } catch (error) {
-      console.error('Error getting user models count from Firebase:', error);
+      console.error('Error getting user models count:', error);
       return 0;
-    }
-  }
-
-  // Migrate existing localStorage subscriptions to Firebase
-  static async migrateSubscriptionsToFirebase(): Promise<boolean> {
-    try {
-      const users = JSON.parse(localStorage.getItem('users') || '[]');
-      let migrationSuccess = true;
-
-      for (const user of users) {
-        if (user.subscription) {
-          const success = await this.createSubscription(user.id, user.subscription);
-          if (!success) {
-            console.error(`Failed to migrate subscription for user: ${user.id}`);
-            migrationSuccess = false;
-          }
-        }
-      }
-
-      if (migrationSuccess) {
-        console.log('✅ All subscriptions migrated to Firebase successfully');
-        // Optionally clear localStorage subscriptions after migration
-        // localStorage.removeItem('users');
-      }
-
-      return migrationSuccess;
-    } catch (error) {
-      console.error('Error migrating subscriptions to Firebase:', error);
-      return false;
     }
   }
 }

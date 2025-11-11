@@ -6,8 +6,6 @@ import { PrimaryButton } from '@/components/ui';
 import Link from 'next/link';
 import { PaymentManager } from '@/lib/payment-utils';
 import { AuthGuard } from '@/components/auth-guard';
-import { unifiedFirestore } from '@/lib/firebase-unified';
-import { userService } from '@/lib/firebase';
 
 interface Purchase {
   id: string;
@@ -68,14 +66,9 @@ export default function BuyerDashboard() {
     loadPurchaseData(user.id);
   }, [router]);
 
-  const loadPurchaseData = async (userId: string) => {
+  const loadPurchaseData = (userId: string) => {
     try {
-      setLoading(true);
-      console.log('🔄 Loading buyer data with Firebase...');
-      
-      // Load purchases from Firebase
-      const userPurchases = await PaymentManager.getUserPurchases(userId);
-      console.log('✅ Loaded purchases:', userPurchases.length);
+      const userPurchases = PaymentManager.getUserPurchases(userId);
       setPurchases(userPurchases);
 
       const total = userPurchases.reduce((sum: number, purchase: Purchase) => sum + purchase.price, 0);
@@ -84,53 +77,22 @@ export default function BuyerDashboard() {
       const recent = userPurchases.slice(-3).reverse();
       setRecentPurchases(recent);
 
-      // Load purchased models from Firebase
-      const purchasedModelsData: AIModel[] = [];
-      for (const purchase of userPurchases) {
-        try {
-          const model = await unifiedFirestore.getModel(purchase.modelId);
-          if (model) {
-            purchasedModelsData.push({
-              id: model.id,
-              name: model.name || '',
-              niche: model.niche || '',
-              description: model.description || '',
-              status: model.status || 'approved',
-              price: model.price || 0,
-              owner: model.owner || '',
-              ownerName: model.ownerName || '',
-              media: model.media || {
-                sfwImages: [],
-                nsfwImages: [],
-                sfwVideos: [],
-                nsfwVideos: []
-              },
-              stats: model.stats || {
-                views: 0,
-                likes: 0,
-                downloads: 0,
-                rating: 0
-              },
-              createdAt: model.createdAt || new Date().toISOString()
-            });
-          }
-        } catch (error) {
-          console.error(`Error loading model ${purchase.modelId}:`, error);
-        }
-      }
+      const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      const purchasedModelsData = userPurchases.map((purchase: Purchase) => 
+        allModels.find((model: AIModel) => model.id === purchase.modelId)
+      ).filter(Boolean);
       
-      console.log('✅ Loaded purchased models:', purchasedModelsData.length);
       setPurchasedModels(purchasedModelsData);
       
-      // Update current user from Firebase
-      const updatedUser = await userService.getUserById(userId);
+      const users = JSON.parse(localStorage.getItem('users') || '[]');
+      const updatedUser = users.find((u: any) => u.id === userId);
       if (updatedUser) {
         setCurrentUser(updatedUser);
         localStorage.setItem('currentUser', JSON.stringify(updatedUser));
       }
       
     } catch (error) {
-      console.error('❌ Error loading purchase data:', error);
+      console.error('Error loading purchase data:', error);
       setPurchases([]);
       setPurchasedModels([]);
     } finally {
@@ -147,29 +109,9 @@ export default function BuyerDashboard() {
     return uniqueModelIds.size;
   };
 
-  const handleDownload = async (modelId: string, modelName: string) => {
-    try {
-      // Check if user has purchased this model
-      const hasPurchased = await PaymentManager.hasUserPurchasedModel(currentUser.id, modelId);
-      
-      if (!hasPurchased) {
-        alert('You need to purchase this model before downloading.');
-        return;
-      }
-
-      // In a real app, this would generate a secure download link
-      alert(`Downloading ${modelName}...`);
-      console.log(`Download requested for model: ${modelId}`);
-      
-      // Simulate download process
-      // You would typically call your backend API here to generate a secure download URL
-      const downloadUrl = `/api/download/${modelId}`;
-      window.open(downloadUrl, '_blank');
-      
-    } catch (error) {
-      console.error('Error handling download:', error);
-      alert('Error preparing download. Please try again.');
-    }
+  const handleDownload = (modelId: string, modelName: string) => {
+    alert(`Downloading ${modelName}...`);
+    console.log(`Download requested for model: ${modelId}`);
   };
 
   const formatCurrency = (amount: number) => {
@@ -177,13 +119,6 @@ export default function BuyerDashboard() {
       style: 'currency',
       currency: 'USD'
     }).format(amount);
-  };
-
-  const refreshDashboard = async () => {
-    if (currentUser) {
-      await loadPurchaseData(currentUser.id);
-      alert('Dashboard data refreshed!');
-    }
   };
 
   if (!isClient || !currentUser) {
@@ -206,25 +141,13 @@ export default function BuyerDashboard() {
         </div>
 
         <div className="relative z-10 py-8 px-4 sm:px-6 lg:px-8 space-y-8">
-          {/* Header Section */}
           <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between">
               <div className="flex-1">
-                <div className="flex items-center gap-4 mb-4">
-                  <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent">
-                    Explorer Dashboard
-                  </h1>
-                  <button
-                    onClick={refreshDashboard}
-                    className="flex items-center gap-2 px-3 py-1 bg-slate-700/50 border border-slate-600/50 rounded-lg text-slate-300 hover:text-white hover:bg-slate-700/70 transition-all duration-200 text-sm"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                    Refresh
-                  </button>
-                </div>
-                <p className="text-slate-300">
+                <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent">
+                  Explorer Dashboard
+                </h1>
+                <p className="mt-2 text-slate-300">
                   Welcome back, {currentUser.displayName}! Manage your purchases and subscriptions.
                   {currentUser.role === 'both' && (
                     <span className="text-cyan-400 font-medium">
@@ -270,7 +193,6 @@ export default function BuyerDashboard() {
             </div>
           </div>
 
-          {/* Stats Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6">
             {[
               { 
@@ -329,9 +251,7 @@ export default function BuyerDashboard() {
             ))}
           </div>
 
-          {/* Main Content Grid */}
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            {/* Recent Purchases */}
             {recentPurchases.length > 0 && (
               <div className="xl:col-span-2 bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
@@ -381,7 +301,6 @@ export default function BuyerDashboard() {
               </div>
             )}
 
-            {/* Quick Actions */}
             <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
               <h2 className="text-xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent mb-6">
                 Quick Actions
@@ -431,7 +350,6 @@ export default function BuyerDashboard() {
             </div>
           </div>
 
-          {/* Empty State */}
           {purchases.length === 0 && (
             <div className="bg-gradient-to-r from-slate-800/60 to-cyan-900/20 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
               <h2 className="text-xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent mb-6">
@@ -476,7 +394,6 @@ export default function BuyerDashboard() {
             </div>
           )}
 
-          {/* Purchased Models Collection */}
           {purchases.length > 0 && (
             <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
               <h2 className="text-xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent mb-6">

@@ -1,7 +1,6 @@
 'use client';
 
 import { SubscriptionManager } from './subscription-utils';
-import { userService } from '@/lib/firebase';
 
 export interface PaymentConfig {
   minimumModelPrice: number;
@@ -52,7 +51,6 @@ export class PaymentManager {
     }
   };
 
-  // Validate model price (unchanged)
   static validateModelPrice(price: number): { isValid: boolean; error?: string } {
     if (price < this.config.minimumModelPrice) {
       return {
@@ -71,54 +69,45 @@ export class PaymentManager {
     return { isValid: true };
   }
 
-  // Calculate seller earnings - FIXED: Make it async
-  static async calculateSellerEarnings(price: number, sellerId: string): Promise<number> {
-    const commissionRate = await this.getSellerCommissionRate(sellerId);
+  static calculateSellerEarnings(price: number, sellerId: string): number {
+    const commissionRate = this.getSellerCommissionRate(sellerId);
     return price * (1 - commissionRate);
   }
 
-  // Get seller commission rate using Firebase
-  static async getSellerCommissionRate(sellerId: string): Promise<number> {
-    try {
-      const seller = await userService.getUserById(sellerId);
-      
-      if (!seller?.subscription) {
-        return 0.20; // Default commission for non-subscribers
-      }
-
-      const planId = seller.subscription.planId;
-      const features = SubscriptionManager.getSubscriptionFeatures(planId);
-      
-      return (100 - features.revenueShare) / 100; // Convert revenue share to commission rate
-    } catch (error) {
-      console.error('Error getting seller commission rate:', error);
-      return 0.20; // Default fallback
+  static getSellerCommissionRate(sellerId: string): number {
+    const users = JSON.parse(localStorage.getItem('users') || '[]');
+    const seller = users.find((u: any) => u.id === sellerId);
+    
+    if (!seller?.subscription) {
+      return 0.20; // Default commission for non-subscribers
     }
+
+    const planId = seller.subscription.planId;
+    const features = SubscriptionManager.getSubscriptionFeatures(planId);
+    
+    return (100 - features.revenueShare) / 100; // Convert revenue share to commission rate
   }
 
-  // Check if user can list models using Firebase
-  static async canUserListModel(user: any): Promise<{ 
+  static canUserListModel(user: any): { 
     canList: boolean; 
     reason?: string; 
     maxModels?: number; 
     currentModels?: number;
     subscriptionTier?: string;
-  }> {
-    return await SubscriptionManager.canUserListModels(user);
+  } {
+    return SubscriptionManager.canUserListModels(user);
   }
 
-  // Check if user can approve model using Firebase
-  static async canUserApproveModel(user: any, modelId?: string): Promise<{ canApprove: boolean; reason?: string }> {
-    const listCheck = await this.canUserListModel(user);
+  static canUserApproveModel(user: any, modelId?: string): { canApprove: boolean; reason?: string } {
+    const listCheck = this.canUserListModel(user);
     
     if (!listCheck.canList) {
       return { canApprove: false, reason: listCheck.reason };
     }
 
     if (modelId) {
-      // Check if model belongs to user (you'll need to implement this)
-      const { firestore } = require('@/lib/firebase');
-      const model = await firestore.get('aiModels', modelId);
+      const models = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      const model = models.find((m: any) => m.id === modelId);
       
       if (model && model.owner !== user.id) {
         return { canApprove: false, reason: 'You can only approve your own models' };
@@ -128,7 +117,7 @@ export class PaymentManager {
     return { canApprove: true };
   }
 
-  // Process model purchase with Stripe Checkout (unchanged)
+  // Process model purchase with Stripe Checkout
   static async processModelPurchase(
     modelId: string, 
     buyerId: string, 
@@ -140,8 +129,8 @@ export class PaymentManager {
     error?: string; 
   }> {
     try {
-      const { firestore } = require('@/lib/firebase');
-      const model = await firestore.get('aiModels', modelId);
+      const models = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      const model = models.find((m: any) => m.id === modelId);
       
       if (!model) {
         return { success: false, error: 'Model not found' };
@@ -152,7 +141,7 @@ export class PaymentManager {
       }
 
       // Check if user already purchased
-      if (await this.hasUserPurchasedModel(buyerId, modelId)) {
+      if (this.hasUserPurchasedModel(buyerId, modelId)) {
         return { success: false, error: 'You already purchased this model' };
       }
 
@@ -168,7 +157,7 @@ export class PaymentManager {
           modelId: model.id,
           buyerId: buyerId,
           sellerId: model.owner,
-          customerId: await this.getUserStripeCustomerId(buyerId)
+          customerId: this.getUserStripeCustomerId(buyerId)
         }),
       });
 
@@ -190,22 +179,22 @@ export class PaymentManager {
     }
   }
 
-  // Complete purchase after successful Stripe payment with Firebase
-  static async completePurchaseAfterStripePayment(
+  // Complete purchase after successful Stripe payment
+  static completePurchaseAfterStripePayment(
     sessionId: string,
     modelId: string,
     buyerId: string,
     price: number
-  ): Promise<{ success: boolean; transaction?: PurchaseTransaction; error?: string }> {
+  ): { success: boolean; transaction?: PurchaseTransaction; error?: string } {
     try {
-      const { firestore } = require('@/lib/firebase');
-      const model = await firestore.get('aiModels', modelId);
+      const models = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      const model = models.find((m: any) => m.id === modelId);
       
       if (!model) {
         return { success: false, error: 'Model not found' };
       }
 
-      const commissionRate = await this.getSellerCommissionRate(model.owner);
+      const commissionRate = this.getSellerCommissionRate(model.owner);
       const platformCommission = price * commissionRate;
       const sellerRevenue = price - platformCommission;
 
@@ -215,29 +204,29 @@ export class PaymentManager {
         modelId,
         modelName: model.name,
         buyerId,
-        buyerName: await this.getUserName(buyerId),
+        buyerName: this.getUserName(buyerId),
         sellerId: model.owner,
         sellerName: model.ownerName,
         price,
         sellerRevenue,
         platformCommission,
-        commissionRate: commissionRate * 100, // FIXED: Now commissionRate is a number, not a Promise
+        commissionRate: commissionRate * 100,
         status: 'completed',
         purchasedAt: new Date().toISOString(),
         stripeSessionId: sessionId
       };
 
-      // Save transaction to Firebase
-      await this.saveTransactionToFirebase(transaction);
+      // Save transaction
+      this.saveTransaction(transaction);
 
-      // Update model download count in Firebase
-      await this.updateModelStatsInFirebase(modelId);
+      // Update model download count
+      this.updateModelStats(modelId);
 
-      // Update buyer's purchase history in Firebase
-      await this.updateBuyerStatsInFirebase(buyerId, price);
+      // Update buyer's purchase history
+      this.updateBuyerStats(buyerId, price);
 
-      // Update seller's earnings in Firebase
-      await this.updateSellerEarningsInFirebase(model.owner, sellerRevenue);
+      // Update seller's earnings
+      this.updateSellerEarnings(model.owner, sellerRevenue);
 
       return { success: true, transaction };
 
@@ -247,7 +236,7 @@ export class PaymentManager {
     }
   }
 
-  // Verify Stripe payment (unchanged)
+  // Check if a purchase was completed for a Stripe session
   static async verifyStripePayment(sessionId: string): Promise<{ 
     success: boolean; 
     isPaid: boolean; 
@@ -285,253 +274,233 @@ export class PaymentManager {
     }
   }
 
-  // Check if user has purchased model using Firebase
-  static async hasUserPurchasedModel(userId: string, modelId: string): Promise<boolean> {
-    try {
-      const { firestore } = require('@/lib/firebase');
-      const transactions = await firestore.query('purchaseTransactions', [
-        { field: 'buyerId', operator: '==', value: userId },
-        { field: 'modelId', operator: '==', value: modelId },
-        { field: 'status', operator: '==', value: 'completed' }
-      ]);
-      
-      return transactions.length > 0;
-    } catch (error) {
-      console.error('Error checking user purchase:', error);
-      return false;
+  static hasUserPurchasedModel(userId: string, modelId: string): boolean {
+    const transactions = this.getTransactions();
+    return transactions.some(tx => 
+      tx.buyerId === userId && 
+      tx.modelId === modelId && 
+      tx.status === 'completed'
+    );
+  }
+
+  static getUserPurchases(userId: string): PurchaseTransaction[] {
+    const transactions = this.getTransactions();
+    return transactions.filter(tx => 
+      tx.buyerId === userId && 
+      tx.status === 'completed'
+    ).sort((a, b) => new Date(b.purchasedAt).getTime() - new Date(a.purchasedAt).getTime());
+  }
+
+  static getSellerEarnings(sellerId: string): SellerEarnings {
+    const transactions = this.getTransactions();
+    const sellerTransactions = transactions.filter(tx => 
+      tx.sellerId === sellerId && 
+      tx.status === 'completed'
+    );
+
+    const totalRevenue = sellerTransactions.reduce((sum, tx) => sum + tx.sellerRevenue, 0);
+    const payouts = this.getSellerPayouts(sellerId);
+    const totalPayouts = payouts.reduce((sum, payout) => sum + payout.amount, 0);
+    const availableBalance = totalRevenue - totalPayouts;
+    const currentCommissionRate = this.getSellerCommissionRate(sellerId);
+
+    return {
+      totalRevenue,
+      availableBalance,
+      pendingPayout: 0,
+      totalPayouts,
+      commissionRate: currentCommissionRate * 100,
+      transactions: sellerTransactions
+    };
+  }
+
+  static requestPayout(sellerId: string, amount: number): { success: boolean; error?: string } {
+    const earnings = this.getSellerEarnings(sellerId);
+    
+    if (amount < 50) {
+      return { success: false, error: 'Minimum payout amount is $50' };
     }
-  }
 
-  // Get user purchases from Firebase
-  static async getUserPurchases(userId: string): Promise<PurchaseTransaction[]> {
-    try {
-      const { firestore } = require('@/lib/firebase');
-      const transactions = await firestore.query('purchaseTransactions', [
-        { field: 'buyerId', operator: '==', value: userId },
-        { field: 'status', operator: '==', value: 'completed' }
-      ]);
-      
-      return transactions.sort((a: any, b: any) => 
-        new Date(b.purchasedAt).getTime() - new Date(a.purchasedAt).getTime()
-      );
-    } catch (error) {
-      console.error('Error getting user purchases:', error);
-      return [];
+    if (amount > earnings.availableBalance) {
+      return { success: false, error: 'Insufficient available balance' };
     }
+
+    const payout = {
+      id: `payout_${Date.now()}`,
+      sellerId,
+      amount,
+      requestedAt: new Date().toISOString(),
+      status: 'pending'
+    };
+
+    const payouts = JSON.parse(localStorage.getItem('payouts') || '[]');
+    payouts.push(payout);
+    localStorage.setItem('payouts', JSON.stringify(payouts));
+
+    this.updatePayoutRequest(sellerId, amount);
+
+    return { success: true };
   }
 
-  // Get seller earnings from Firebase
-  static async getSellerEarnings(sellerId: string): Promise<SellerEarnings> {
-    try {
-      const { firestore } = require('@/lib/firebase');
-      const transactions = await firestore.query('purchaseTransactions', [
-        { field: 'sellerId', operator: '==', value: sellerId },
-        { field: 'status', operator: '==', value: 'completed' }
-      ]);
-
-      const totalRevenue = transactions.reduce((sum: number, tx: any) => sum + tx.sellerRevenue, 0);
-      
-      const payouts = await firestore.query('payouts', [
-        { field: 'sellerId', operator: '==', value: sellerId },
-        { field: 'status', operator: '==', value: 'completed' }
-      ]);
-      
-      const totalPayouts = payouts.reduce((sum: number, payout: any) => sum + payout.amount, 0);
-      const availableBalance = totalRevenue - totalPayouts;
-      const currentCommissionRate = await this.getSellerCommissionRate(sellerId);
-
-      return {
-        totalRevenue,
-        availableBalance,
-        pendingPayout: 0,
-        totalPayouts,
-        commissionRate: currentCommissionRate * 100, // FIXED: Now currentCommissionRate is a number
-        transactions
-      };
-    } catch (error) {
-      console.error('Error getting seller earnings:', error);
-      return {
-        totalRevenue: 0,
-        availableBalance: 0,
-        pendingPayout: 0,
-        totalPayouts: 0,
-        commissionRate: 20,
-        transactions: []
-      };
-    }
+  private static getTransactions(): PurchaseTransaction[] {
+    return JSON.parse(localStorage.getItem('purchaseTransactions') || '[]');
   }
 
-  // Request payout using Firebase
-  static async requestPayout(sellerId: string, amount: number): Promise<{ success: boolean; error?: string }> {
-    try {
-      const earnings = await this.getSellerEarnings(sellerId);
-      
-      if (amount < 50) {
-        return { success: false, error: 'Minimum payout amount is $50' };
-      }
-
-      if (amount > earnings.availableBalance) {
-        return { success: false, error: 'Insufficient available balance' };
-      }
-
-      const payout = {
-        id: `payout_${Date.now()}`,
-        sellerId,
-        amount,
-        requestedAt: new Date().toISOString(),
-        status: 'pending'
-      };
-
-      const { firestore } = require('@/lib/firebase');
-      await firestore.create('payouts', payout);
-
-      await this.updatePayoutRequestInFirebase(sellerId, amount);
-
-      return { success: true };
-    } catch (error) {
-      console.error('Error requesting payout:', error);
-      return { success: false, error: 'Failed to request payout' };
-    }
+  private static saveTransaction(transaction: PurchaseTransaction) {
+    const transactions = this.getTransactions();
+    transactions.push(transaction);
+    localStorage.setItem('purchaseTransactions', JSON.stringify(transactions));
   }
 
-  // Firebase helper methods
-  private static async saveTransactionToFirebase(transaction: PurchaseTransaction): Promise<void> {
-    const { firestore } = require('@/lib/firebase');
-    await firestore.create('purchaseTransactions', transaction);
-  }
-
-  private static async getUserName(userId: string): Promise<string> {
-    const user = await userService.getUserById(userId);
+  private static getUserName(userId: string): string {
+    const users = JSON.parse(localStorage.getItem('users') || '[]');
+    const user = users.find((u: any) => u.id === userId);
     return user?.displayName || user?.username || 'Unknown User';
   }
 
-  private static async getUserStripeCustomerId(userId: string): Promise<string | undefined> {
-    const user = await userService.getUserById(userId);
+  private static getUserStripeCustomerId(userId: string): string | undefined {
+    const users = JSON.parse(localStorage.getItem('users') || '[]');
+    const user = users.find((u: any) => u.id === userId);
     return user?.stripeCustomerId;
   }
 
-  private static async updateModelStatsInFirebase(modelId: string): Promise<void> {
-    const { firestore } = require('@/lib/firebase');
-    const model = await firestore.get('aiModels', modelId);
-    
-    if (model) {
-      await firestore.update('aiModels', modelId, {
-        stats: {
-          ...model.stats,
-          downloads: (model.stats?.downloads || 0) + 1
-        },
-        updatedAt: new Date().toISOString()
-      });
-    }
+  private static getUserApprovedModelsCount(userId: string): number {
+    const models = JSON.parse(localStorage.getItem('aiModels') || '[]');
+    return models.filter((model: any) => 
+      model.owner === userId && model.status === 'approved'
+    ).length;
   }
 
-  private static async updateBuyerStatsInFirebase(buyerId: string, amount: number): Promise<void> {
-    const buyer = await userService.getUserById(buyerId);
-    
-    if (buyer) {
-      await userService.updateUserProfile(buyerId, {
-        stats: {
-          ...buyer.stats,
-          totalPurchases: (buyer.stats?.totalPurchases || 0) + 1,
-          totalSpent: (buyer.stats?.totalSpent || 0) + amount
-        },
-        updatedAt: new Date().toISOString()
-      });
+  private static updateModelStats(modelId: string) {
+    const models = JSON.parse(localStorage.getItem('aiModels') || '[]');
+    const updatedModels = models.map((model: any) => {
+      if (model.id === modelId) {
+        return {
+          ...model,
+          stats: {
+            ...model.stats,
+            downloads: (model.stats.downloads || 0) + 1
+          }
+        };
+      }
+      return model;
+    });
+    localStorage.setItem('aiModels', JSON.stringify(updatedModels));
+  }
 
-      // Update current user in localStorage
-      const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (currentUser.id === buyerId) {
-        const updatedUser = await userService.getUserById(buyerId);
-        if (updatedUser) {
-          localStorage.setItem('currentUser', JSON.stringify(updatedUser));
-        }
+  private static updateBuyerStats(buyerId: string, amount: number) {
+    const users = JSON.parse(localStorage.getItem('users') || '[]');
+    const updatedUsers = users.map((user: any) => {
+      if (user.id === buyerId) {
+        return {
+          ...user,
+          stats: {
+            ...user.stats,
+            totalPurchases: (user.stats?.totalPurchases || 0) + 1,
+            totalSpent: (user.stats?.totalSpent || 0) + amount
+          }
+        };
+      }
+      return user;
+    });
+    localStorage.setItem('users', JSON.stringify(updatedUsers));
+
+    const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+    if (currentUser.id === buyerId) {
+      const updatedCurrentUser = updatedUsers.find((u: any) => u.id === buyerId);
+      if (updatedCurrentUser) {
+        localStorage.setItem('currentUser', JSON.stringify(updatedCurrentUser));
       }
     }
   }
 
-  private static async updateSellerEarningsInFirebase(sellerId: string, amount: number): Promise<void> {
-    const seller = await userService.getUserById(sellerId);
+  private static updateSellerEarnings(sellerId: string, amount: number) {
+    const users = JSON.parse(localStorage.getItem('users') || '[]');
+    const updatedUsers = users.map((user: any) => {
+      if (user.id === sellerId) {
+        const currentEarnings = user.earnings || { total: 0, available: 0, pending: 0, paidOut: 0 };
+        return {
+          ...user,
+          earnings: {
+            total: currentEarnings.total + amount,
+            available: currentEarnings.available + amount,
+            pending: currentEarnings.pending || 0,
+            paidOut: currentEarnings.paidOut || 0
+          },
+          stats: {
+            ...user.stats,
+            totalSales: (user.stats?.totalSales || 0) + 1,
+            totalRevenue: (user.stats?.totalRevenue || 0) + amount
+          }
+        };
+      }
+      return user;
+    });
+    localStorage.setItem('users', JSON.stringify(updatedUsers));
+
+    const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+    if (currentUser.id === sellerId) {
+      const updatedCurrentUser = updatedUsers.find((u: any) => u.id === sellerId);
+      if (updatedCurrentUser) {
+        localStorage.setItem('currentUser', JSON.stringify(updatedCurrentUser));
+      }
+    }
+  }
+
+  private static getSellerPayouts(sellerId: string): any[] {
+    const payouts = JSON.parse(localStorage.getItem('payouts') || '[]');
+    return payouts.filter((p: any) => p.sellerId === sellerId && p.status === 'completed');
+  }
+
+  private static updatePayoutRequest(sellerId: string, amount: number) {
+    const users = JSON.parse(localStorage.getItem('users') || '[]');
+    const userIndex = users.findIndex((u: any) => u.id === sellerId);
     
-    if (seller) {
-      const currentEarnings = seller.earnings || { total: 0, available: 0, pending: 0, paidOut: 0 };
+    if (userIndex !== -1) {
+      users[userIndex].earnings.available -= amount;
+      users[userIndex].earnings.pending += amount;
+      users[userIndex].updatedAt = new Date().toISOString();
       
-      await userService.updateUserProfile(sellerId, {
-        earnings: {
-          total: currentEarnings.total + amount,
-          available: currentEarnings.available + amount,
-          pending: currentEarnings.pending || 0,
-          paidOut: currentEarnings.paidOut || 0
-        },
-        stats: {
-          ...seller.stats,
-          totalSales: (seller.stats?.totalSales || 0) + 1,
-          totalRevenue: (seller.stats?.totalRevenue || 0) + amount
-        },
-        updatedAt: new Date().toISOString()
-      });
-
-      // Update current user in localStorage
-      const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (currentUser.id === sellerId) {
-        const updatedUser = await userService.getUserById(sellerId);
-        if (updatedUser) {
-          localStorage.setItem('currentUser', JSON.stringify(updatedUser));
-        }
-      }
-    }
-  }
-
-  private static async updatePayoutRequestInFirebase(sellerId: string, amount: number): Promise<void> {
-    const seller = await userService.getUserById(sellerId);
-    
-    if (seller) {
-      await userService.updateUserProfile(sellerId, {
-        earnings: {
-          ...seller.earnings,
-          available: (seller.earnings?.available || 0) - amount,
-          pending: (seller.earnings?.pending || 0) + amount
-        },
-        updatedAt: new Date().toISOString()
-      });
+      localStorage.setItem('users', JSON.stringify(users));
 
       const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
       if (currentUser && currentUser.id === sellerId) {
-        const updatedUser = await userService.getUserById(sellerId);
-        if (updatedUser) {
-          localStorage.setItem('currentUser', JSON.stringify(updatedUser));
-        }
+        currentUser.earnings = users[userIndex].earnings;
+        localStorage.setItem('currentUser', JSON.stringify(currentUser));
       }
     }
   }
 
-  // Get config (unchanged)
   static getConfig(): PaymentConfig {
     return this.config;
   }
 
   // Backward compatibility methods
   static recordSale(modelId: string, sellerId: string, price: number): void {
-    // For backward compatibility
-    this.processDirectPurchase(modelId, 'anonymous_buyer', price);
+    // For backward compatibility - use the old direct purchase method
+    const result = this.processDirectPurchase(modelId, 'anonymous_buyer', price);
+    if (!result.success) {
+      console.error('Failed to record sale:', result.error);
+    }
   }
 
-  static async processListingFee(user: any, modelPrice: number): Promise<{ success: boolean; error?: string }> {
-    const canApprove = await this.canUserApproveModel(user);
+  static processListingFee(user: any, modelPrice: number): { success: boolean; error?: string } {
+    const canApprove = this.canUserApproveModel(user);
     if (!canApprove.canApprove) {
       return { success: false, error: canApprove.reason };
     }
     return { success: true };
   }
 
-  // Legacy method for direct purchase (without payment) using Firebase
-  static async processDirectPurchase(
+  // Legacy method for direct purchase (without payment)
+  static processDirectPurchase(
     modelId: string, 
     buyerId: string, 
     price: number
-  ): Promise<{ success: boolean; transaction?: PurchaseTransaction; error?: string }> {
+  ): { success: boolean; transaction?: PurchaseTransaction; error?: string } {
     try {
-      const { firestore } = require('@/lib/firebase');
-      const model = await firestore.get('aiModels', modelId);
+      const models = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      const model = models.find((m: any) => m.id === modelId);
       
       if (!model) {
         return { success: false, error: 'Model not found' };
@@ -541,11 +510,11 @@ export class PaymentManager {
         return { success: false, error: 'Model is not available for purchase' };
       }
 
-      if (await this.hasUserPurchasedModel(buyerId, modelId)) {
+      if (this.hasUserPurchasedModel(buyerId, modelId)) {
         return { success: false, error: 'You already purchased this model' };
       }
 
-      const commissionRate = await this.getSellerCommissionRate(model.owner);
+      const commissionRate = this.getSellerCommissionRate(model.owner);
       const platformCommission = price * commissionRate;
       const sellerRevenue = price - platformCommission;
 
@@ -554,21 +523,21 @@ export class PaymentManager {
         modelId,
         modelName: model.name,
         buyerId,
-        buyerName: await this.getUserName(buyerId),
+        buyerName: this.getUserName(buyerId),
         sellerId: model.owner,
         sellerName: model.ownerName,
         price,
         sellerRevenue,
         platformCommission,
-        commissionRate: commissionRate * 100, // FIXED: Now commissionRate is a number
+        commissionRate: commissionRate * 100,
         status: 'completed',
         purchasedAt: new Date().toISOString()
       };
 
-      await this.saveTransactionToFirebase(transaction);
-      await this.updateModelStatsInFirebase(modelId);
-      await this.updateBuyerStatsInFirebase(buyerId, price);
-      await this.updateSellerEarningsInFirebase(model.owner, sellerRevenue);
+      this.saveTransaction(transaction);
+      this.updateModelStats(modelId);
+      this.updateBuyerStats(buyerId, price);
+      this.updateSellerEarnings(model.owner, sellerRevenue);
 
       return { success: true, transaction };
 
