@@ -1,19 +1,66 @@
-// lib/firebase-unified.ts
-import { firestore, storageService } from './firebase';
+// lib/firebase-unified.ts - CLEAN VERSION
+import { firestore, db } from './firebase';
 import { where } from 'firebase/firestore';
-import { UnifiedIDSystem } from './id-system';
+import { doc, setDoc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+
+// Interface for model data
+interface AIModel {
+  id: string;
+  name: string;
+  niche: string;
+  description: string;
+  status: 'pending' | 'approved' | 'rejected';
+  price: number;
+  owner: string;
+  ownerName: string;
+  media: {
+    sfwImages: string[];
+    nsfwImages: string[];
+    sfwVideos: string[];
+    nsfwVideos: string[];
+  };
+  stats: {
+    views: number;
+    likes: number;
+    downloads: number;
+    rating: number;
+  };
+  createdAt: string;
+  updatedAt: string;
+  firestoreId: string; // Now required for all new models
+}
+
+// Helper function to get db with proper null check
+const getDB = () => {
+  if (!db) {
+    throw new Error('Firestore database is not initialized');
+  }
+  return db;
+};
+
+// Unified ID System - Simplified
+class UnifiedIDSystem {
+  static generateModelID(): string {
+    const timestamp = Date.now();
+    const randomStr = Math.random().toString(36).substring(2, 10);
+    return `model_${timestamp}_${randomStr}`;
+  }
+}
 
 export const unifiedFirestore = {
   /**
-   * Create model with unified ID system
+   * Create model with unified ID system - OPTIMIZED FOR NEW MODELS
    */
-  createModel: async (data: any): Promise<any> => {
+  createModel: async (data: any): Promise<AIModel> => {
     const modelId = UnifiedIDSystem.generateModelID();
     
-    const modelData = {
-      ...data,
+    // Remove id from data to avoid conflicts
+    const { id: _, ...dataWithoutId } = data;
+    
+    const modelData: AIModel = {
+      ...dataWithoutId,
       id: modelId, // Unified ID
-      firestoreId: modelId, // Same as unified ID
+      firestoreId: modelId, // Same as document ID
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -21,11 +68,14 @@ export const unifiedFirestore = {
     try {
       console.log('🔄 Creating model with unified ID:', modelId);
       
-      // Use the unified ID as the Firestore document ID
-      const docRef = await firestore.create('aiModels', modelData);
+      const database = getDB();
       
-      console.log('✅ Model created successfully with unified ID:', modelId);
-      return { id: modelId, ...modelData };
+      // Use the unified ID as the Firestore document ID
+      const docRef = doc(database, 'aiModels', modelId);
+      await setDoc(docRef, modelData);
+      
+      console.log('✅ Model created successfully:', modelId);
+      return modelData;
     } catch (error) {
       console.error('❌ Error creating model:', error);
       throw new Error('Failed to create model');
@@ -33,31 +83,27 @@ export const unifiedFirestore = {
   },
 
   /**
-   * Get model by unified ID
+   * Get model by unified ID - SIMPLIFIED
    */
-  getModel: async (modelId: string): Promise<any> => {
+  getModel: async (modelId: string): Promise<AIModel | null> => {
     try {
-      console.log('🔍 Getting model by unified ID:', modelId);
+      console.log('🔍 Getting model:', modelId);
       
-      // Try direct lookup first (since we use unified ID as Firestore ID)
-      let model = await firestore.get('aiModels', modelId);
+      const database = getDB();
       
-      if (!model) {
-        console.log('🔄 Model not found with direct ID, searching by id field...');
-        // Fallback: search by id field
-        const models = await firestore.query('aiModels', [
-          where('id', '==', modelId)
-        ]);
-        model = models.length > 0 ? models[0] : null;
+      // Direct lookup using unified ID as document ID
+      const docRef = doc(database, 'aiModels', modelId);
+      const docSnap = await getDoc(docRef);
+      
+      if (docSnap.exists()) {
+        const modelData = docSnap.data() as AIModel;
+        console.log('✅ Model found:', modelData.name);
+        return modelData;
       }
       
-      if (model) {
-        console.log('✅ Model found:', model.name);
-        return model;
-      } else {
-        console.log('❌ Model not found:', modelId);
-        return null;
-      }
+      console.log('❌ Model not found:', modelId);
+      return null;
+      
     } catch (error) {
       console.error('❌ Error getting model:', error);
       throw new Error('Failed to get model');
@@ -65,79 +111,56 @@ export const unifiedFirestore = {
   },
 
   /**
-   * Update model by unified ID
+   * Update model by unified ID - SIMPLIFIED
    */
   updateModel: async (modelId: string, data: any): Promise<void> => {
     try {
-      console.log('🔄 Updating model with unified ID:', modelId);
+      console.log('🔄 Updating model:', modelId);
       
-      // Try direct update first
-      await firestore.update('aiModels', modelId, {
+      const database = getDB();
+      const docRef = doc(database, 'aiModels', modelId);
+      
+      await updateDoc(docRef, {
         ...data,
         updatedAt: new Date().toISOString()
       });
       
       console.log('✅ Model updated successfully:', modelId);
+      
     } catch (error) {
-      console.error('❌ Direct update failed, trying fallback...', error);
-      
-      // Fallback: find by id field and update using Firestore ID
-      const models = await firestore.query('aiModels', [
-        where('id', '==', modelId)
-      ]);
-      
-      if (models.length === 0) {
-        throw new Error(`Model not found: ${modelId}`);
-      }
-      
-      const firestoreId = models[0].id; // This is the Firestore document ID
-      await firestore.update('aiModels', firestoreId, {
-        ...data,
-        updatedAt: new Date().toISOString()
-      });
-      
-      console.log('✅ Model updated via fallback:', modelId);
+      console.error('❌ Error updating model:', error);
+      throw new Error(`Failed to update model ${modelId}`);
     }
   },
 
   /**
-   * Delete model by unified ID
+   * Delete model by unified ID - SIMPLIFIED
    */
   deleteModel: async (modelId: string): Promise<void> => {
     try {
-      console.log('🗑️ Deleting model with unified ID:', modelId);
+      console.log('🗑️ Deleting model:', modelId);
       
-      // Try direct delete first
-      await firestore.delete('aiModels', modelId);
+      const database = getDB();
+      const docRef = doc(database, 'aiModels', modelId);
+      
+      await deleteDoc(docRef);
       console.log('✅ Model deleted successfully:', modelId);
+      
     } catch (error) {
-      console.error('❌ Direct delete failed, trying fallback...', error);
-      
-      // Fallback: find by id field and delete using Firestore ID
-      const models = await firestore.query('aiModels', [
-        where('id', '==', modelId)
-      ]);
-      
-      if (models.length === 0) {
-        throw new Error(`Model not found: ${modelId}`);
-      }
-      
-      const firestoreId = models[0].id; // This is the Firestore document ID
-      await firestore.delete('aiModels', firestoreId);
-      
-      console.log('✅ Model deleted via fallback:', modelId);
+      console.error('❌ Error deleting model:', error);
+      throw new Error(`Failed to delete model ${modelId}`);
     }
   },
 
   /**
    * Get all models for user
    */
-  getUserModels: async (userId: string): Promise<any[]> => {
+  getUserModels: async (userId: string): Promise<AIModel[]> => {
     try {
       console.log('🔍 Getting models for user:', userId);
       const models = await firestore.query('aiModels', [
         where('owner', '==', userId)
-      ]);
+      ]) as AIModel[];
       console.log('✅ User models loaded:', models.length);
       return models;
     } catch (error) {
@@ -149,12 +172,12 @@ export const unifiedFirestore = {
   /**
    * Get all approved models for marketplace
    */
-  getApprovedModels: async (): Promise<any[]> => {
+  getApprovedModels: async (): Promise<AIModel[]> => {
     try {
       console.log('🔍 Getting approved models for marketplace');
       const models = await firestore.query('aiModels', [
         where('status', '==', 'approved')
-      ]);
+      ]) as AIModel[];
       console.log('✅ Approved models loaded:', models.length);
       return models;
     } catch (error) {
@@ -183,22 +206,29 @@ export const unifiedFirestore = {
   },
 
   /**
-   * Update model likes
+   * DEBUG: Get all models for debugging
    */
-  updateModelLikes: async (modelId: string, increment: boolean): Promise<void> => {
+  debugGetAllModels: async (): Promise<AIModel[]> => {
     try {
-      const model = await unifiedFirestore.getModel(modelId);
-      if (model) {
-        const currentLikes = model.stats.likes || 0;
-        await unifiedFirestore.updateModel(modelId, {
-          stats: {
-            ...model.stats,
-            likes: increment ? currentLikes + 1 : Math.max(0, currentLikes - 1)
-          }
+      console.log('🐛 DEBUG: Getting all models for inspection');
+      const models = await firestore.query('aiModels') as AIModel[];
+      console.log('🐛 DEBUG: Found models:', models.length);
+      
+      // Log each model's ID status
+      models.forEach(model => {
+        console.log('🐛 DEBUG Model:', {
+          id: model.id,
+          firestoreId: model.firestoreId,
+          name: model.name,
+          status: model.status,
+          idsMatch: model.id === model.firestoreId ? '✅' : '❌'
         });
-      }
+      });
+      
+      return models;
     } catch (error) {
-      console.error('❌ Error updating likes:', error);
+      console.error('❌ DEBUG: Error getting all models:', error);
+      return [];
     }
   }
 };

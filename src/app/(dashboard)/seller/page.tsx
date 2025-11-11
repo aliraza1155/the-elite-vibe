@@ -251,80 +251,103 @@ export default function SellerDashboard() {
     }
   };
 
-  const handleApproveModel = async (modelId: string) => {
-    if (!currentUser) {
-      alert('❌ No user found. Please log in again.');
+ 
+  // In your seller/page.tsx - Update the handleApproveModel function
+const handleApproveModel = async (modelId: string) => {
+  if (!currentUser) {
+    alert('❌ No user found. Please log in again.');
+    return;
+  }
+
+  console.log('🔄 Starting SOLID model approval with unified ID:', modelId);
+  setApprovingModelId(modelId);
+
+  try {
+    // Step 1: Get the model using our enhanced unified system
+    console.log('🔍 Getting model details...');
+    const model = await unifiedFirestore.getModel(modelId);
+    
+    if (!model) {
+      throw new Error(`Model not found: ${modelId}. It may have been deleted or there might be an ID mismatch.`);
+    }
+
+    console.log('✅ Model found:', model.name);
+    console.log('📋 Model ID details:', {
+      providedId: modelId,
+      modelId: model.id,
+      firestoreId: model.firestoreId,
+      name: model.name,
+      status: model.status
+    });
+
+    // Step 2: Check subscription status
+    const approvalCheck = PaymentManager.canUserApproveModel(currentUser, modelId);
+    console.log('📋 Approval check result:', approvalCheck);
+    
+    if (!approvalCheck.canApprove) {
+      const userConfirmed = window.confirm(
+        `${approvalCheck.reason}\n\nClick OK to view our pricing plans and subscribe.`
+      );
+      
+      if (userConfirmed) {
+        router.push('/pricing');
+      }
+      setApprovingModelId(null);
       return;
     }
 
-    console.log('🔄 Starting model approval with unified ID:', modelId);
-    setApprovingModelId(modelId);
+    console.log('✅ Subscription check passed, proceeding with approval...');
 
-    try {
-      // Get the model using unified system
-      const model = await unifiedFirestore.getModel(modelId);
-      
-      if (!model) {
-        throw new Error(`Model not found: ${modelId}`);
-      }
+    // Step 3: Update using enhanced unified system
+    console.log('🔥 Updating model status to approved...');
+    await unifiedFirestore.updateModel(modelId, { 
+      status: 'approved',
+      updatedAt: new Date().toISOString()
+    });
+    
+    console.log('✅ Model approved successfully!');
 
-      console.log('✅ Model found:', model.name);
-
-      // Check subscription status
-      const approvalCheck = PaymentManager.canUserApproveModel(currentUser, modelId);
-      console.log('📋 Approval check result:', approvalCheck);
+    // Step 4: Update UI state
+    setUserModels(prev => prev.map(m => 
+      m.id === modelId ? { ...m, status: 'approved' } : m
+    ));
+    
+    // Step 5: Refresh subscription status
+    checkSubscriptionStatus(currentUser);
+    
+    console.log('🎉 Model approval completed successfully!');
+    alert('✅ Model approved and listed in marketplace successfully!');
+    
+  } catch (error: any) {
+    console.error('❌ SOLID Error approving model:', error);
+    
+    let errorMessage = 'Error approving model. Please try again.';
+    
+    if (error.message?.includes('not found')) {
+      errorMessage = `Model not found: ${modelId}. It may have been deleted or there's an ID mismatch.`;
       
-      if (!approvalCheck.canApprove) {
-        const userConfirmed = window.confirm(
-          `${approvalCheck.reason}\n\nClick OK to view our pricing plans and subscribe.`
-        );
-        
-        if (userConfirmed) {
-          router.push('/pricing');
-        }
-        setApprovingModelId(null);
-        return;
-      }
-
-      console.log('✅ Subscription check passed, proceeding with approval...');
-
-      // Update using unified system
-      console.log('🔥 Updating model status to approved...');
-      await unifiedFirestore.updateModel(modelId, { 
-        status: 'approved',
-        updatedAt: new Date().toISOString()
-      });
+      // Debug: Log all models to see what's happening
+      console.log('🐛 DEBUG: Checking all models for ID mismatch...');
+      const allModels = await unifiedFirestore.debugGetAllModels();
+      const matchingModels = allModels.filter(m => 
+        m.id === modelId || m.firestoreId === modelId
+      );
+      console.log('🐛 DEBUG: Models matching ID:', matchingModels);
       
-      console.log('✅ Model approved successfully!');
-
-      // Update UI state
-      setUserModels(prev => prev.map(m => 
-        m.id === modelId ? { ...m, status: 'approved' } : m
-      ));
-      
-      // Refresh subscription status
-      checkSubscriptionStatus(currentUser);
-      
-      console.log('🎉 Model approval completed successfully!');
-      alert('✅ Model approved and listed in marketplace successfully!');
-      
-    } catch (error: any) {
-      console.error('❌ Error approving model:', error);
-      
-      let errorMessage = 'Error approving model. Please try again.';
-      
-      if (error.message?.includes('not found')) {
-        errorMessage = 'Model not found in database. It may have been deleted.';
-        loadSellerData(currentUser.id);
-      } else if (error.message?.includes('permission')) {
-        errorMessage = 'You do not have permission to approve this model.';
-      }
-      
-      alert(`❌ ${errorMessage}`);
-    } finally {
-      setApprovingModelId(null);
+      loadSellerData(currentUser.id);
+    } else if (error.message?.includes('permission')) {
+      errorMessage = 'You do not have permission to approve this model. Please check your subscription status.';
+    } else if (error.message?.includes('Failed to update')) {
+      errorMessage = 'Database update failed. This might be a temporary issue. Please try again.';
+    } else if (error.message?.includes('Firestore database is not initialized')) {
+      errorMessage = 'Database connection issue. Please refresh the page and try again.';
     }
-  };
+    
+    alert(`❌ ${errorMessage}`);
+  } finally {
+    setApprovingModelId(null);
+  }
+};
 
   const deleteModel = async (modelId: string) => {
     if (!confirm('Are you sure you want to delete this model? This action cannot be undone.')) {
