@@ -6,7 +6,8 @@ import { Header, Footer } from '@/components/layout';
 import { PrimaryButton } from '@/components/ui';
 import Link from 'next/link';
 import { PaymentManager } from '@/lib/payment-utils';
-import { SubscriptionManager } from '@/lib/subscription-utils';
+import { SubscriptionManager, Subscription } from '@/lib/subscription-utils';
+import { userService } from '@/lib/firebase';
 
 // Main content component that uses useSearchParams
 function PaymentSuccessContent() {
@@ -38,14 +39,15 @@ function PaymentSuccessContent() {
       const result = await PaymentManager.verifyStripePayment(sessionId);
       
       if (result.success && result.isPaid && result.modelId && result.buyerId && result.amount) {
-        // Complete the purchase
-        const purchaseResult = PaymentManager.completePurchaseAfterStripePayment(
+        // Complete the purchase - ADD AWAIT HERE
+        const purchaseResult = await PaymentManager.completePurchaseAfterStripePayment(
           sessionId,
           result.modelId,
           result.buyerId,
           result.amount
         );
 
+        // FIXED: Now properly await the promise and check the result
         if (purchaseResult.success) {
           setStatus('success');
           setPurchaseDetails(purchaseResult.transaction);
@@ -108,15 +110,15 @@ function PaymentSuccessContent() {
         throw new Error('No plan information found in session');
       }
 
-      // Create subscription record
-      const subscriptionData = {
+      // Create subscription record with proper type
+      const subscriptionData: Subscription = {
         id: `sub_${Date.now()}`,
         stripeSubscriptionId: session.subscription?.id || session.id,
         stripeCustomerId: session.customer,
         planId: planId,
-        type: planType,
+        type: planType as 'seller' | 'buyer',
         amount: amount,
-        status: 'active',
+        status: 'active', // FIXED: This matches the Subscription type
         purchasedAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
         paymentMethod: 'card',
@@ -125,45 +127,12 @@ function PaymentSuccessContent() {
         nextBillingDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
       };
 
-      // Update current user
-      const updatedUser = {
-        ...currentUser,
-        subscription: subscriptionData,
-        role: planType === 'seller' ? (currentUser.role === 'both' ? 'both' : 'seller') : currentUser.role,
-        stripeCustomerId: session.customer,
-        updatedAt: new Date().toISOString()
-      };
+      // Update user in Firebase using SubscriptionManager
+      const success = await SubscriptionManager.createSubscription(currentUser.id, subscriptionData);
 
-      // Save updated user to localStorage
-      localStorage.setItem('currentUser', JSON.stringify(updatedUser));
-
-      // Update users array in localStorage
-      const users = JSON.parse(localStorage.getItem('users') || '[]');
-      const userIndex = users.findIndex((u: any) => u.id === currentUser.id);
-      if (userIndex !== -1) {
-        users[userIndex] = updatedUser;
-        localStorage.setItem('users', JSON.stringify(users));
+      if (!success) {
+        throw new Error('Failed to update subscription in database');
       }
-
-      // Save to subscriptions list
-      const userSubscriptions = JSON.parse(localStorage.getItem('userSubscriptions') || '[]');
-      const existingSubIndex = userSubscriptions.findIndex((sub: any) => 
-        sub.userId === currentUser.id && sub.status === 'active'
-      );
-      
-      if (existingSubIndex !== -1) {
-        userSubscriptions[existingSubIndex] = {
-          ...subscriptionData,
-          userId: currentUser.id
-        };
-      } else {
-        userSubscriptions.push({
-          ...subscriptionData,
-          userId: currentUser.id
-        });
-      }
-      
-      localStorage.setItem('userSubscriptions', JSON.stringify(userSubscriptions));
 
       // Clear selected plan
       localStorage.removeItem('selectedPlan');
@@ -182,6 +151,7 @@ function PaymentSuccessContent() {
     ).join(' ');
   };
 
+  // ... rest of the component remains the same
   if (status === 'loading') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">

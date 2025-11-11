@@ -4,6 +4,7 @@ export interface UserProfile {
   avatar?: string;
   ageVerified: boolean;
   bio?: string;
+  profilePicture?: string; // Added for profile editor compatibility
 }
 
 export interface UserSubscription {
@@ -18,6 +19,7 @@ export interface UserStats {
   totalListings: number;
   totalSales: number;
   rating: number;
+  totalPurchases?: number; // Added for buyer stats
 }
 
 export interface Subscription {
@@ -68,13 +70,14 @@ export interface PaymentValidation {
   action?: 'subscription' | 'one_time';
 }
 
-// Updated User interface with new fields
+// Updated User interface with email verification
 export interface User {
   uid: string;
   id: string;
   username: string;
   displayName: string;
   email: string;
+  emailVerified?: boolean; // Added email verification field
   role: 'buyer' | 'seller' | 'admin' | 'both';
   subscription?: Subscription;
   profile: UserProfile;
@@ -82,8 +85,9 @@ export interface User {
   earnings?: Earnings;
   availableListings?: number;
   stripeCustomerId?: string;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+  password?: string; // Added for signup process (should be removed after creation)
 }
 
 // Model Types
@@ -205,6 +209,21 @@ export interface FirebaseUser {
   email: string | null;
   displayName: string | null;
   photoURL?: string | null;
+  emailVerified?: boolean; // Added for Firebase Auth compatibility
+}
+
+// Auth Types for Email Verification
+export interface AuthState {
+  user: User | null;
+  loading: boolean;
+  error: string | null;
+  emailVerificationSent?: boolean;
+}
+
+export interface EmailVerificationResult {
+  success: boolean;
+  message: string;
+  error?: string;
 }
 
 // Component Props Types
@@ -257,11 +276,19 @@ export interface FileValidatorProps {
   onValidationResult: (result: UploadValidationResult) => void;
 }
 
+// Email Verification Components Props
+export interface EmailVerificationProps {
+  user: User;
+  onResendVerification: (email: string) => Promise<EmailVerificationResult>;
+  onRefresh?: () => void;
+}
+
 // Storage Types
 export interface UploadResult {
   file: File;
   url: string;
   error?: string;
+  uploadedBytes?: number; // Added for progress tracking
 }
 
 export interface ModelUploadResults {
@@ -272,13 +299,6 @@ export interface ModelUploadResults {
   errors: string[];
 }
 
-// Auth Types
-export interface AuthState {
-  user: User | null;
-  loading: boolean;
-  error: string | null;
-}
-
 // Payment Types
 export interface PaymentResult {
   success: boolean;
@@ -286,4 +306,12 @@ export interface PaymentResult {
   paymentIntentId?: string;
   clientSecret?: string;
   error?: string;
+}
+
+// Password Reset Types
+export interface PasswordResetState {
+  loading: boolean;
+  error: string | null;
+  success: boolean;
+  email?: string;
 }

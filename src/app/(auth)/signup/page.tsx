@@ -4,7 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { PrimaryButton } from '@/components/ui';
 import { UserManager } from '@/lib/user-utils';
-import { userService } from '@/lib/firebase';
+import { userService, authService } from '@/lib/firebase';
+import { createUserWithEmailAndPassword, sendEmailVerification, updateProfile } from 'firebase/auth';
 
 export default function SignupPage() {
   const [formData, setFormData] = useState({
@@ -96,13 +97,36 @@ export default function SignupPage() {
         return;
       }
 
-      const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const user = {
+      // Create user with Firebase Auth using authService
+      console.log('🔐 Creating Firebase Auth user...');
+      const userCredential = await authService.register(formData.email, formData.password);
+      
+      const firebaseUser = userCredential.user;
+      console.log('✅ Firebase Auth user created:', firebaseUser.uid);
+
+      // Update profile with display name
+      if (formData.displayName) {
+        await updateProfile(firebaseUser, {
+          displayName: formData.displayName
+        });
+      }
+
+      // Send email verification using authService
+      console.log('📧 Sending email verification...');
+      await authService.sendEmailVerification(firebaseUser);
+      console.log('✅ Email verification sent');
+
+      // Create user document in Firestore - FIXED: Ensure no undefined values
+      const userId = firebaseUser.uid;
+      
+      // Base user object with required fields
+      const baseUser = {
         id: userId,
+        uid: userId,
         username: formData.username,
         displayName: formData.displayName || formData.username,
         email: formData.email,
-        password: formData.password,
+        emailVerified: false,
         role: formData.role,
         profile: {
           displayName: formData.displayName || formData.username,
@@ -116,43 +140,73 @@ export default function SignupPage() {
           rating: 0,
           totalPurchases: 0
         },
-        earnings: formData.role === 'seller' || formData.role === 'both' ? {
-          total: 0,
-          available: 0,
-          pending: 0,
-          paidOut: 0
-        } : undefined,
-        subscription: null,
+        availableListings: 0,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
 
+      // Add earnings only for seller/both roles
+      const userWithEarnings = formData.role === 'seller' || formData.role === 'both' 
+        ? {
+            ...baseUser,
+            earnings: {
+              total: 0,
+              available: 0,
+              pending: 0,
+              paidOut: 0
+            }
+          }
+        : baseUser;
+
+      // Add subscription field (can be null)
+      const finalUser = {
+        ...userWithEarnings,
+        subscription: null
+      };
+
       // Save to Firestore
-      await userService.createUser(user);
+      await userService.createUser(finalUser);
       console.log('✅ User saved to Firestore');
 
-      // Create session without password for security
-      const { password: _, ...userWithoutPassword } = user;
-      localStorage.setItem('currentUser', JSON.stringify(userWithoutPassword));
+      // Sign out the user immediately after account creation
+      await authService.logout();
+      
+      setSuccess('Account created successfully! Please check your email to verify your account, then sign in.');
 
-      setSuccess('Account created successfully! Redirecting...');
-
+      // Redirect to login page immediately with success message
       setTimeout(() => {
-        if (formData.role === 'seller' || formData.role === 'both') {
-          router.push('/seller');
-        } else {
-          router.push('/buyer');
-        }
-      }, 2000);
+        router.push('/auth/login?message=verify-email');
+      }, 3000);
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Signup error:', error);
-      setError(error instanceof Error ? error.message : 'Registration failed. Please try again.');
+      
+      let errorMessage = 'Registration failed. Please try again.';
+      
+      switch (error.code) {
+        case 'auth/email-already-in-use':
+          errorMessage = 'An account with this email already exists.';
+          break;
+        case 'auth/invalid-email':
+          errorMessage = 'Invalid email address format.';
+          break;
+        case 'auth/weak-password':
+          errorMessage = 'Password is too weak. Please choose a stronger password.';
+          break;
+        case 'auth/operation-not-allowed':
+          errorMessage = 'Email/password accounts are not enabled. Please contact support.';
+          break;
+        default:
+          errorMessage = error.message || 'Registration failed. Please try again.';
+      }
+      
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
+  // ... rest of the component JSX remains exactly the same
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
       {/* Animated Background */}
@@ -466,7 +520,7 @@ export default function SignupPage() {
                   Already have an account?{' '}
                   <button
                     type="button"
-                    onClick={() => router.push('/login')}
+                    onClick={() => router.push('/auth/login')}
                     className="font-semibold text-cyan-400 hover:text-cyan-300 transition-colors duration-200 hover:underline"
                   >
                     Sign in here

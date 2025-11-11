@@ -21,15 +21,8 @@ export class UserManager {
       errors.push('Username cannot exceed 20 characters');
     }
     
-    // Check uniqueness
-    const existingUsers = JSON.parse(localStorage.getItem('users') || '[]');
-    const isUnique = !existingUsers.some((user: any) => 
-      user.username?.toLowerCase() === username.toLowerCase()
-    );
-    
-    if (!isUnique) {
-      errors.push('Username is already taken');
-    }
+    // Note: Removed localStorage uniqueness check since we now use Firestore
+    // Uniqueness is checked in the signup process via userService
     
     return {
       isValid: errors.length === 0,
@@ -47,15 +40,8 @@ export class UserManager {
       errors.push('Please enter a valid email address');
     }
     
-    // Check uniqueness
-    const existingUsers = JSON.parse(localStorage.getItem('users') || '[]');
-    const isUnique = !existingUsers.some((user: any) => 
-      user.email?.toLowerCase() === email.toLowerCase()
-    );
-    
-    if (!isUnique) {
-      errors.push('Email is already registered');
-    }
+    // Note: Removed localStorage uniqueness check since we now use Firestore
+    // Uniqueness is checked in the signup process via userService
     
     return {
       isValid: errors.length === 0,
@@ -92,28 +78,39 @@ export class UserManager {
     };
   }
 
-  static generateUniqueUsername(base: string): string {
-    const existingUsers = JSON.parse(localStorage.getItem('users') || '[]');
-    let username = base.toLowerCase().replace(/[^a-z0-9]/g, '');
-    let counter = 1;
-    let finalUsername = username;
+  static validateEmailVerification(user: any): UserValidationResult {
+    const errors: string[] = [];
     
-    while (existingUsers.some((user: any) => user.username === finalUsername)) {
-      finalUsername = `${username}${counter}`;
-      counter++;
+    // Check if user exists and email is not verified
+    if (user && user.emailVerified === false) {
+      errors.push('Email address not verified. Please check your inbox for the verification link.');
     }
     
-    return finalUsername;
+    return {
+      isValid: errors.length === 0,
+      errors
+    };
+  }
+
+  static generateUniqueUsername(base: string): string {
+    // Note: This is now handled by Firestore in the signup process
+    // Keeping for backward compatibility
+    const timestamp = Date.now();
+    const randomStr = Math.random().toString(36).substring(2, 8);
+    return `${base.toLowerCase().replace(/[^a-z0-9]/g, '')}_${timestamp}${randomStr}`;
   }
 
   static updateUserProfile(userId: string, updates: any): boolean {
     try {
+      // Note: This function now primarily updates localStorage
+      // Firestore updates are handled by userService in firebase.ts
+      
       const existingUsers = JSON.parse(localStorage.getItem('users') || '[]');
       const userIndex = existingUsers.findIndex((user: any) => user.id === userId);
       
       if (userIndex === -1) return false;
       
-      // Prevent username/email duplication
+      // Prevent username/email duplication in localStorage
       if (updates.username) {
         const usernameValidation = this.validateUsername(updates.username);
         if (!usernameValidation.isValid) return false;
@@ -143,17 +140,26 @@ export class UserManager {
       
       return true;
     } catch (error) {
-      console.error('Error updating user profile:', error);
+      console.error('Error updating user profile in localStorage:', error);
       return false;
     }
   }
 
   static getUserById(userId: string): any {
     try {
+      // First check localStorage for backward compatibility
       const users = JSON.parse(localStorage.getItem('users') || '[]');
-      return users.find((user: any) => user.id === userId) || null;
+      const localUser = users.find((user: any) => user.id === userId);
+      
+      if (localUser) {
+        return localUser;
+      }
+      
+      // If not found in localStorage, return null
+      // Firestore operations are handled by userService
+      return null;
     } catch (error) {
-      console.error('Error getting user:', error);
+      console.error('Error getting user from localStorage:', error);
       return null;
     }
   }
@@ -162,8 +168,57 @@ export class UserManager {
     try {
       return JSON.parse(localStorage.getItem('users') || '[]');
     } catch (error) {
-      console.error('Error getting users:', error);
+      console.error('Error getting users from localStorage:', error);
       return [];
+    }
+  }
+
+  // New method to handle email verification status
+  static checkEmailVerificationStatus(user: any): { verified: boolean; message?: string } {
+    if (!user) {
+      return { verified: false, message: 'User not found' };
+    }
+    
+    if (user.emailVerified === true) {
+      return { verified: true };
+    }
+    
+    if (user.emailVerified === false) {
+      return { 
+        verified: false, 
+        message: 'Please verify your email address to access all features.' 
+      };
+    }
+    
+    // For users created before email verification was implemented
+    // Consider them verified for backward compatibility
+    if (user.emailVerified === undefined) {
+      return { verified: true };
+    }
+    
+    return { verified: false, message: 'Email verification status unknown' };
+  }
+
+  // Method to resend verification email (placeholder)
+  static async resendVerificationEmail(email: string): Promise<{ success: boolean; message: string }> {
+    try {
+      // This would typically call your backend or Firebase function
+      // For now, we'll simulate the process
+      console.log(`Resending verification email to: ${email}`);
+      
+      // Simulate API call
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      return {
+        success: true,
+        message: 'Verification email sent successfully. Please check your inbox.'
+      };
+    } catch (error) {
+      console.error('Error resending verification email:', error);
+      return {
+        success: false,
+        message: 'Failed to send verification email. Please try again.'
+      };
     }
   }
 }

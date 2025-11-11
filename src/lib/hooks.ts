@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { User, UploadProgress, FirebaseUser, FileUploadType, ModelUploadResults } from '@/types';
-import { authService, storageService } from './firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { User, UploadProgress, FirebaseUser, FileUploadType, ModelUploadResults, EmailVerificationResult, PasswordResetState } from '@/types';
+import { authService, storageService, userService } from './firebase';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { sendEmailVerification, sendPasswordResetEmail } from 'firebase/auth';
 
 // Helper function to check if we're on client side
 const isClient = typeof window !== 'undefined';
@@ -16,11 +17,22 @@ const getDb = () => {
   return db;
 };
 
-// Authentication Hook
+// Get auth instance with proper typing
+const getAuth = () => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  // Import auth only on client side to avoid SSR issues
+  const { auth } = require('./firebase');
+  return auth;
+};
+
+// Enhanced Authentication Hook with Email Verification
 export const useAuth = () => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [emailVerificationSent, setEmailVerificationSent] = useState(false);
 
   useEffect(() => {
     // Only run on client side
@@ -45,27 +57,44 @@ export const useAuth = () => {
           const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
           if (userDoc.exists()) {
             const userData = userDoc.data() as User;
+            
+            // Update email verification status from Firebase Auth
+            const updatedUser = {
+              ...userData,
+              emailVerified: firebaseUser.emailVerified || userData.emailVerified
+            };
+
             if (mounted) {
-              setUser(userData);
+              setUser(updatedUser);
+            }
+
+            // Update Firestore with current email verification status
+            if (userData.emailVerified !== firebaseUser.emailVerified) {
+              await updateDoc(doc(db, 'users', firebaseUser.uid), {
+                emailVerified: firebaseUser.emailVerified,
+                updatedAt: new Date().toISOString()
+              });
             }
           } else {
+            // Create new user document if it doesn't exist
             const newUser: User = {
               uid: firebaseUser.uid,
-              id: firebaseUser.uid, // Added missing id field
-              username: firebaseUser.email!.split('@')[0], // Added missing username field
+              id: firebaseUser.uid,
+              username: firebaseUser.email!.split('@')[0],
               displayName: firebaseUser.displayName || firebaseUser.email!.split('@')[0],
               email: firebaseUser.email!,
+              emailVerified: firebaseUser.emailVerified || false,
               role: 'buyer',
               subscription: { 
-                id: 'sub_default', // Added required id field
-                planId: 'plan_buyer', // Added required planId field
+                id: 'sub_default',
+                planId: 'plan_buyer',
                 type: 'buyer',
-                amount: 0, // Added required amount field
+                amount: 0,
                 status: 'active',
-                purchasedAt: new Date().toISOString(), // Using expiresAt instead of currentPeriodEnd
-                expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days from now
-                paymentMethod: 'card', // Added required paymentMethod field
-                features: { // Added required features field
+                purchasedAt: new Date().toISOString(),
+                expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+                paymentMethod: 'card',
+                features: {
                   maxModels: 0,
                   listingDuration: 0,
                   revenueShare: 0
@@ -74,20 +103,22 @@ export const useAuth = () => {
               profile: { 
                 displayName: firebaseUser.displayName || firebaseUser.email!.split('@')[0], 
                 ageVerified: false, 
-                bio: '' 
+                bio: '',
+                profilePicture: ''
               },
               stats: { 
                 totalListings: 0, 
                 totalSales: 0, 
-                rating: 0 
+                rating: 0,
+                totalPurchases: 0
               },
-              earnings: { // Added missing earnings field
+              earnings: {
                 total: 0,
                 available: 0,
                 pending: 0,
                 paidOut: 0
               },
-              availableListings: 0, // Added missing availableListings field
+              availableListings: 0,
               createdAt: new Date(),
               updatedAt: new Date()
             };
@@ -132,7 +163,15 @@ export const useAuth = () => {
   const register = async (email: string, password: string) => {
     try {
       setError(null);
-      return await authService.register(email, password);
+      const userCredential = await authService.register(email, password);
+      
+      // Send email verification after registration
+      if (userCredential.user) {
+        await sendEmailVerification(userCredential.user);
+        setEmailVerificationSent(true);
+      }
+      
+      return userCredential;
     } catch (err: any) {
       setError(err.message || 'Registration failed');
       throw err;
@@ -144,13 +183,14 @@ export const useAuth = () => {
       setError(null);
       await authService.logout();
       setUser(null);
+      setEmailVerificationSent(false);
     } catch (err: any) {
       setError(err.message || 'Logout failed');
       throw err;
     }
   };
 
-  const updateUserProfile = async (updates: Partial<User['profile']>) => {
+  const updateUserProfile = async (updates: Partial<User>) => {
     if (!user) return;
     
     try {
@@ -158,16 +198,55 @@ export const useAuth = () => {
       const db = getDb();
       if (!db) return;
 
-      await setDoc(doc(db, 'users', user.uid), {
-        ...user,
-        profile: { ...user.profile, ...updates },
+      await updateDoc(doc(db, 'users', user.uid), {
+        ...updates,
         updatedAt: new Date()
-      }, { merge: true });
+      });
       
-      setUser(prev => prev ? { ...prev, profile: { ...prev.profile, ...updates } } : null);
+      setUser(prev => prev ? { ...prev, ...updates } : null);
     } catch (err: any) {
       setError(err.message || 'Profile update failed');
       throw err;
+    }
+  };
+
+  const resendEmailVerification = async (): Promise<EmailVerificationResult> => {
+    try {
+      setError(null);
+      const currentUser = authService.getCurrentUser();
+      
+      if (!currentUser) {
+        return { success: false, message: 'No user logged in' };
+      }
+
+      await sendEmailVerification(currentUser);
+      setEmailVerificationSent(true);
+      
+      return { 
+        success: true, 
+        message: 'Verification email sent successfully. Please check your inbox.' 
+      };
+    } catch (err: any) {
+      const errorMessage = err.message || 'Failed to send verification email';
+      setError(errorMessage);
+      return { success: false, message: errorMessage };
+    }
+  };
+
+  const checkEmailVerification = async (): Promise<boolean> => {
+    if (!user) return false;
+    
+    try {
+      // Reload user to get latest email verification status
+      const currentUser = authService.getCurrentUser();
+      if (currentUser) {
+        await currentUser.reload();
+        return currentUser.emailVerified;
+      }
+      return user.emailVerified || false;
+    } catch (err) {
+      console.error('Error checking email verification:', err);
+      return user.emailVerified || false;
     }
   };
 
@@ -175,10 +254,108 @@ export const useAuth = () => {
     user, 
     loading, 
     error,
+    emailVerificationSent,
     login, 
     register, 
     logout, 
-    updateUserProfile 
+    updateUserProfile,
+    resendEmailVerification,
+    checkEmailVerification
+  };
+};
+
+// Password Reset Hook
+export const usePasswordReset = () => {
+  const [state, setState] = useState<PasswordResetState>({
+    loading: false,
+    error: null,
+    success: false,
+    email: undefined
+  });
+
+  const resetPassword = async (email: string) => {
+    setState({ loading: true, error: null, success: false, email });
+    
+    try {
+      // Use authService instead of direct auth import
+      await authService.sendPasswordResetEmail(email);
+      setState({ loading: false, error: null, success: true, email });
+    } catch (error: any) {
+      let errorMessage = 'Failed to send reset email. Please try again.';
+      
+      switch (error.code) {
+        case 'auth/user-not-found':
+          errorMessage = 'No account found with this email address.';
+          break;
+        case 'auth/invalid-email':
+          errorMessage = 'Invalid email address format.';
+          break;
+        case 'auth/too-many-requests':
+          errorMessage = 'Too many attempts. Please try again later.';
+          break;
+        default:
+          errorMessage = error.message || 'Failed to send reset email.';
+      }
+      
+      setState({ loading: false, error: errorMessage, success: false, email });
+    }
+  };
+
+  const resetState = () => {
+    setState({ loading: false, error: null, success: false, email: undefined });
+  };
+
+  return {
+    ...state,
+    resetPassword,
+    resetState
+  };
+};
+
+// Email Verification Hook
+export const useEmailVerification = () => {
+  const [verifying, setVerifying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  const checkEmailVerification = async (user: User): Promise<boolean> => {
+    if (!user.emailVerified) {
+      setError('Please verify your email address to access this feature.');
+      return false;
+    }
+    return true;
+  };
+
+  const resendVerificationEmail = async (email: string): Promise<boolean> => {
+    setVerifying(true);
+    setError(null);
+    setSuccess(false);
+    
+    try {
+      // Use userService to resend verification email
+      const result = await userService.resendEmailVerification(email);
+      setSuccess(result);
+      return result;
+    } catch (err: any) {
+      setError(err.message || 'Failed to resend verification email');
+      return false;
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const clearState = () => {
+    setError(null);
+    setSuccess(false);
+  };
+
+  return {
+    verifying,
+    error,
+    success,
+    checkEmailVerification,
+    resendVerificationEmail,
+    clearState
   };
 };
 

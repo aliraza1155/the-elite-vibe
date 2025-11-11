@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { PrimaryButton } from '@/components/ui';
 import { validateEmail } from '@/lib/utils';
-import { userService } from '@/lib/firebase';
+import { userService, authService } from '@/lib/firebase';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -13,16 +13,49 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
+  const [showResendButton, setShowResendButton] = useState(false);
   
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    // Check for success messages from redirects
+    const message = searchParams.get('message');
+    if (message === 'verify-email') {
+      setInfo('Please verify your email address before signing in. Check your inbox for the verification link.');
+      setShowResendButton(true);
+    }
+  }, [searchParams]);
 
   const togglePasswordVisibility = () => {
     setShowPassword(!showPassword);
   };
 
+  const handleResendVerification = async () => {
+    setLoading(true);
+    try {
+      // Use authService to resend verification email
+      const currentUser = authService.getCurrentUser();
+      if (currentUser) {
+        await authService.sendEmailVerification(currentUser);
+        setInfo('Verification email sent successfully! Please check your inbox.');
+        setShowResendButton(false);
+      } else {
+        setError('No user found. Please try logging in again.');
+      }
+    } catch (error: any) {
+      setError('Failed to send verification email. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setInfo('');
+    setShowResendButton(false);
     setLoading(true);
 
     if (!validateEmail(email)) {
@@ -40,15 +73,36 @@ export default function LoginPage() {
     try {
       console.log('🔍 Attempting login for:', email);
       
-      // Verify credentials using Firestore
-      const user = await userService.verifyCredentials(email, password);
+      // Use Firebase Auth for login using authService
+      const userCredential = await authService.login(email, password);
+      const firebaseUser = userCredential.user;
       
-      if (!user) {
-        throw new Error('Invalid email or password');
+      // Check if email is verified
+      if (!firebaseUser.emailVerified) {
+        // Sign out the user since email is not verified
+        await authService.logout();
+        
+        setError('Please verify your email address before signing in.');
+        setShowResendButton(true);
+        setLoading(false);
+        return;
       }
 
-      // Save to session
-      localStorage.setItem('currentUser', JSON.stringify(user));
+      // Get user data from Firestore
+      const user = await userService.findUserByEmail(email);
+      
+      if (!user) {
+        throw new Error('User account not found in database');
+      }
+
+      // Update email verification status in Firestore
+      await userService.updateUserProfile(user.id, {
+        emailVerified: true
+      });
+
+      // Save to session (without password for security)
+      const { password: _, ...userWithoutPassword } = user;
+      localStorage.setItem('currentUser', JSON.stringify(userWithoutPassword));
       console.log('✅ User session created');
       
       // Redirect based on role
@@ -60,7 +114,31 @@ export default function LoginPage() {
       
     } catch (error: any) {
       console.error('❌ Login error:', error);
-      setError(error.message || 'Failed to sign in. Please check your credentials.');
+      
+      let errorMessage = error.message || 'Failed to sign in. Please check your credentials.';
+      
+      switch (error.code) {
+        case 'auth/user-not-found':
+          errorMessage = 'No account found with this email address.';
+          break;
+        case 'auth/wrong-password':
+          errorMessage = 'Invalid password. Please try again.';
+          break;
+        case 'auth/invalid-email':
+          errorMessage = 'Invalid email address format.';
+          break;
+        case 'auth/too-many-requests':
+          errorMessage = 'Too many failed attempts. Please try again later.';
+          break;
+        case 'auth/user-disabled':
+          errorMessage = 'This account has been disabled. Please contact support.';
+          break;
+        case 'auth/network-request-failed':
+          errorMessage = 'Network error. Please check your internet connection.';
+          break;
+      }
+      
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -102,6 +180,21 @@ export default function LoginPage() {
             <div className="absolute -top-3 -right-3 w-6 h-6 bg-cyan-400 rounded-full blur-sm animate-ping"></div>
             <div className="absolute -bottom-3 -left-3 w-4 h-4 bg-purple-400 rounded-full blur-sm animate-ping delay-700"></div>
 
+            {info && (
+              <div className="bg-blue-500/10 border border-blue-400/30 rounded-xl p-4 mb-6 backdrop-blur-sm">
+                <div className="flex items-center">
+                  <div className="flex-shrink-0">
+                    <svg className="h-5 w-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <p className="text-sm text-blue-200">{info}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <form className="space-y-6" onSubmit={handleSubmit}>
               {error && (
                 <div className="bg-red-500/10 border border-red-400/30 rounded-xl p-4 backdrop-blur-sm">
@@ -115,6 +208,18 @@ export default function LoginPage() {
                       <p className="text-sm text-red-200">{error}</p>
                     </div>
                   </div>
+                  {showResendButton && (
+                    <div className="mt-3">
+                      <button
+                        type="button"
+                        onClick={handleResendVerification}
+                        disabled={loading}
+                        className="w-full bg-amber-500/10 border border-amber-400/30 text-amber-200 py-2 px-4 rounded-lg hover:bg-amber-500/20 transition-colors duration-200 disabled:opacity-50"
+                      >
+                        {loading ? 'Sending...' : 'Resend Verification Email'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -252,6 +357,9 @@ export default function LoginPage() {
                   </p>
                   <p className="text-xs text-slate-300">
                     • Choose "Both" role for buyer & seller dashboards
+                  </p>
+                  <p className="text-xs text-slate-300 mt-2 text-amber-400">
+                    • New accounts require email verification before login
                   </p>
                 </div>
               </div>
