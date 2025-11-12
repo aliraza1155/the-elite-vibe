@@ -1,3 +1,4 @@
+// components/payment-modal.tsx - UPDATED VERSION
 'use client';
 
 import { useState } from 'react';
@@ -11,7 +12,7 @@ interface PaymentModalProps {
   onSuccess: (transaction: any) => void;
   paymentIntent: any;
   model: any;
-  currentUser: any; // Add currentUser to props
+  currentUser: any;
 }
 
 export default function PaymentModal({ 
@@ -50,14 +51,15 @@ export default function PaymentModal({
       );
 
       if (result.success && result.transaction) {
-        // Complete the purchase with all required arguments
-        const purchaseResult = PaymentManager.completePurchaseAfterStripePayment(
+        // Complete the purchase with all required arguments - ADDED AWAIT
+        const purchaseResult = await PaymentManager.completePurchaseAfterStripePayment(
           paymentIntent.id,
           model.id,
           currentUser.id,
           model.price
         );
 
+        // Now we can access purchaseResult properties directly since we awaited it
         if (purchaseResult.success) {
           onSuccess(purchaseResult.transaction);
         } else {
@@ -67,7 +69,8 @@ export default function PaymentModal({
         setError(result.error || 'Payment failed');
       }
     } catch (error) {
-      setError('Payment processing failed');
+      console.error('Payment processing error:', error);
+      setError('Payment processing failed. Please try again.');
     } finally {
       setProcessing(false);
     }
@@ -82,6 +85,18 @@ export default function PaymentModal({
       setError('Please enter card expiration date');
       return false;
     }
+    
+    // Validate expiration date
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1;
+    const expYear = parseInt(cardDetails.exp_year);
+    const expMonth = parseInt(cardDetails.exp_month);
+    
+    if (expYear < currentYear || (expYear === currentYear && expMonth < currentMonth)) {
+      setError('Card has expired');
+      return false;
+    }
+    
     if (!cardDetails.cvc || cardDetails.cvc.length !== 3) {
       setError('Please enter a valid CVC');
       return false;
@@ -106,6 +121,27 @@ export default function PaymentModal({
     return parts.length ? parts.join(' ') : value;
   };
 
+  const handleExpiryChange = (field: 'exp_month' | 'exp_year', value: string) => {
+    const numericValue = value.replace(/\D/g, '');
+    
+    if (field === 'exp_month') {
+      // Validate month is between 1-12
+      const month = parseInt(numericValue);
+      if (numericValue && (month < 1 || month > 12)) {
+        setError('Please enter a valid month (01-12)');
+        return;
+      }
+      handleInputChange(field, numericValue.slice(0, 2));
+    } else {
+      handleInputChange(field, numericValue.slice(0, 4));
+    }
+  };
+
+  const handleCvcChange = (value: string) => {
+    const numericValue = value.replace(/\D/g, '');
+    handleInputChange('cvc', numericValue.slice(0, 3));
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -116,6 +152,7 @@ export default function PaymentModal({
           <button
             onClick={onClose}
             className="text-slate-400 hover:text-white transition-colors duration-200"
+            disabled={processing}
           >
             ✕
           </button>
@@ -150,6 +187,7 @@ export default function PaymentModal({
               placeholder="1234 5678 9012 3456"
               maxLength={19}
               className="w-full px-4 py-3 bg-slate-700/50 border border-slate-600/50 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all duration-200"
+              disabled={processing}
             />
           </div>
 
@@ -162,18 +200,20 @@ export default function PaymentModal({
                 <input
                   type="text"
                   value={cardDetails.exp_month}
-                  onChange={(e) => handleInputChange('exp_month', e.target.value.replace(/\D/g, '').slice(0, 2))}
+                  onChange={(e) => handleExpiryChange('exp_month', e.target.value)}
                   placeholder="MM"
                   maxLength={2}
                   className="w-full px-4 py-3 bg-slate-700/50 border border-slate-600/50 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all duration-200"
+                  disabled={processing}
                 />
                 <input
                   type="text"
                   value={cardDetails.exp_year}
-                  onChange={(e) => handleInputChange('exp_year', e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  onChange={(e) => handleExpiryChange('exp_year', e.target.value)}
                   placeholder="YYYY"
                   maxLength={4}
                   className="w-full px-4 py-3 bg-slate-700/50 border border-slate-600/50 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all duration-200"
+                  disabled={processing}
                 />
               </div>
             </div>
@@ -185,10 +225,11 @@ export default function PaymentModal({
               <input
                 type="text"
                 value={cardDetails.cvc}
-                onChange={(e) => handleInputChange('cvc', e.target.value.replace(/\D/g, '').slice(0, 3))}
+                onChange={(e) => handleCvcChange(e.target.value)}
                 placeholder="123"
                 maxLength={3}
                 className="w-full px-4 py-3 bg-slate-700/50 border border-slate-600/50 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all duration-200"
+                disabled={processing}
               />
             </div>
           </div>
@@ -203,6 +244,7 @@ export default function PaymentModal({
               onChange={(e) => handleInputChange('name', e.target.value)}
               placeholder="John Doe"
               className="w-full px-4 py-3 bg-slate-700/50 border border-slate-600/50 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all duration-200"
+              disabled={processing}
             />
           </div>
         </div>
@@ -214,7 +256,14 @@ export default function PaymentModal({
             disabled={processing}
             className="w-full bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600 shadow-lg shadow-emerald-500/25"
           >
-            {processing ? 'Processing Payment...' : `Pay $${model.price}`}
+            {processing ? (
+              <span className="flex items-center justify-center">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                Processing Payment...
+              </span>
+            ) : (
+              `Pay $${model.price}`
+            )}
           </PrimaryButton>
           
           <div className="text-center">
