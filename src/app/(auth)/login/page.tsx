@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { PrimaryButton } from '@/components/ui';
 import { validateEmail } from '@/lib/utils';
 import { userService, authService } from '@/lib/firebase';
@@ -15,24 +15,31 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [showResendButton, setShowResendButton] = useState(false);
+  const [mounted, setMounted] = useState(false);
   
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   useEffect(() => {
-    // Check for success messages from redirects
-    const message = searchParams.get('message');
-    if (message === 'verify-email') {
-      setInfo('Please verify your email address before signing in. Check your inbox for the verification link.');
-      setShowResendButton(true);
+    setMounted(true);
+    
+    // Check for URL parameters on client side only
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const message = urlParams.get('message');
+      if (message === 'verify-email') {
+        setInfo('Please verify your email address before signing in. Check your inbox for the verification link.');
+        setShowResendButton(true);
+      }
     }
-  }, [searchParams]);
+  }, []);
 
   const togglePasswordVisibility = () => {
     setShowPassword(!showPassword);
   };
 
   const handleResendVerification = async () => {
+    if (!mounted) return;
+    
     setLoading(true);
     try {
       // Use authService to resend verification email
@@ -45,6 +52,7 @@ export default function LoginPage() {
         setError('No user found. Please try logging in again.');
       }
     } catch (error: any) {
+      console.error('Resend verification error:', error);
       setError('Failed to send verification email. Please try again.');
     } finally {
       setLoading(false);
@@ -53,6 +61,8 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!mounted) return;
+    
     setError('');
     setInfo('');
     setShowResendButton(false);
@@ -102,7 +112,9 @@ export default function LoginPage() {
 
       // Save to session (without password for security)
       const { password: _, ...userWithoutPassword } = user;
-      localStorage.setItem('currentUser', JSON.stringify(userWithoutPassword));
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('currentUser', JSON.stringify(userWithoutPassword));
+      }
       console.log('✅ User session created');
       
       // Redirect based on role
@@ -115,27 +127,33 @@ export default function LoginPage() {
     } catch (error: any) {
       console.error('❌ Login error:', error);
       
-      let errorMessage = error.message || 'Failed to sign in. Please check your credentials.';
+      let errorMessage = 'Failed to sign in. Please check your credentials.';
       
-      switch (error.code) {
-        case 'auth/user-not-found':
-          errorMessage = 'No account found with this email address.';
-          break;
-        case 'auth/wrong-password':
-          errorMessage = 'Invalid password. Please try again.';
-          break;
-        case 'auth/invalid-email':
-          errorMessage = 'Invalid email address format.';
-          break;
-        case 'auth/too-many-requests':
-          errorMessage = 'Too many failed attempts. Please try again later.';
-          break;
-        case 'auth/user-disabled':
-          errorMessage = 'This account has been disabled. Please contact support.';
-          break;
-        case 'auth/network-request-failed':
-          errorMessage = 'Network error. Please check your internet connection.';
-          break;
+      if (error.code) {
+        switch (error.code) {
+          case 'auth/user-not-found':
+            errorMessage = 'No account found with this email address.';
+            break;
+          case 'auth/wrong-password':
+            errorMessage = 'Invalid password. Please try again.';
+            break;
+          case 'auth/invalid-email':
+            errorMessage = 'Invalid email address format.';
+            break;
+          case 'auth/too-many-requests':
+            errorMessage = 'Too many failed attempts. Please try again later.';
+            break;
+          case 'auth/user-disabled':
+            errorMessage = 'This account has been disabled. Please contact support.';
+            break;
+          case 'auth/network-request-failed':
+            errorMessage = 'Network error. Please check your internet connection.';
+            break;
+          default:
+            errorMessage = error.message || errorMessage;
+        }
+      } else {
+        errorMessage = error.message || errorMessage;
       }
       
       setError(errorMessage);
@@ -143,6 +161,23 @@ export default function LoginPage() {
       setLoading(false);
     }
   };
+
+  // Show loading state during SSR
+  if (!mounted) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+        <div className="relative z-10 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+          <div className="sm:mx-auto sm:w-full sm:max-w-md">
+            <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-8">
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-400"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
@@ -299,7 +334,7 @@ export default function LoginPage() {
                 </div>
 
                 <div className="text-sm">
-                  <Link href="/forgot-password" className="font-medium text-cyan-400 hover:text-cyan-300 transition-colors duration-200">
+                  <Link href="/auth/forgot-password" className="font-medium text-cyan-400 hover:text-cyan-300 transition-colors duration-200">
                     Forgot your password?
                   </Link>
                 </div>
