@@ -1,6 +1,8 @@
+// lib/payment-utils.ts - COMPLETELY FIXED VERSION
 'use client';
 
 import { SubscriptionManager } from './subscription-utils';
+import { FirebaseDatabase, FirebaseTransaction } from './firebase-database';
 
 export interface PaymentConfig {
   minimumModelPrice: number;
@@ -69,25 +71,28 @@ export class PaymentManager {
     return { isValid: true };
   }
 
-  static calculateSellerEarnings(price: number, sellerId: string): number {
-    const commissionRate = this.getSellerCommissionRate(sellerId);
+  static async calculateSellerEarnings(price: number, sellerId: string): Promise<number> {
+    const commissionRate = await this.getSellerCommissionRate(sellerId);
     return price * (1 - commissionRate);
   }
 
-  static getSellerCommissionRate(sellerId: string): number {
-    const users = JSON.parse(localStorage.getItem('users') || '[]');
-    const seller = users.find((u: any) => u.id === sellerId);
-    
-    if (!seller?.subscription) {
-      return 0.20; // Default commission for non-subscribers
-    }
+  static async getSellerCommissionRate(sellerId: string): Promise<number> {
+    try {
+      const subscription = await FirebaseDatabase.getUserSubscription(sellerId);
+      
+      if (!subscription) {
+        return 0.20; // Default commission for non-subscribers
+      }
 
-    const planId = seller.subscription.planId;
-    const features = SubscriptionManager.getSubscriptionFeatures(planId);
-    
-    return (100 - features.revenueShare) / 100; // Convert revenue share to commission rate
+      const features = SubscriptionManager.getSubscriptionFeatures(subscription.planId);
+      return (100 - features.revenueShare) / 100; // Convert revenue share to commission rate
+    } catch (error) {
+      console.error('Error getting seller commission rate:', error);
+      return 0.20; // Default fallback
+    }
   }
 
+  // FIXED: Properly handle the async SubscriptionManager.canUserListModels
   static canUserListModel(user: any): { 
     canList: boolean; 
     reason?: string; 
@@ -95,7 +100,65 @@ export class PaymentManager {
     currentModels?: number;
     subscriptionTier?: string;
   } {
-    return SubscriptionManager.canUserListModels(user);
+    // For synchronous usage, we need to handle the promise immediately
+    // This is a workaround for the async SubscriptionManager
+    try {
+      // Check if user has basic requirements synchronously
+      if (!user) {
+        return { canList: false, reason: 'User not found' };
+      }
+
+      if (user.role !== 'seller' && user.role !== 'both') {
+        return { canList: false, reason: 'Seller account required to list models' };
+      }
+
+      // For subscription check, we'll use a simplified synchronous approach
+      const hasActiveSub = user.subscription && 
+                          user.subscription.status === 'active' && 
+                          new Date(user.subscription.expiresAt) > new Date();
+      
+      if (!hasActiveSub) {
+        return { 
+          canList: false, 
+          reason: 'Active subscription required to list models. Please upgrade your plan.',
+          subscriptionTier: 'Free'
+        };
+      }
+
+      const maxModels = SubscriptionManager.getMaxModelsForPlan(user.subscription.planId);
+      const currentModels = this.getUserApprovedModelsCountSync(user.id);
+
+      if (maxModels !== -1 && currentModels >= maxModels) {
+        return { 
+          canList: false, 
+          reason: `You've reached your limit of ${maxModels} models. Upgrade your plan to list more models.`,
+          maxModels,
+          currentModels,
+          subscriptionTier: SubscriptionManager.getSubscriptionTierName(user.subscription.planId)
+        };
+      }
+
+      return { 
+        canList: true, 
+        maxModels, 
+        currentModels,
+        subscriptionTier: SubscriptionManager.getSubscriptionTierName(user.subscription.planId)
+      };
+
+    } catch (error) {
+      console.error('Error checking if user can list models:', error);
+      return { canList: false, reason: 'Error checking subscription status' };
+    }
+  }
+
+  static async canUserListModelAsync(user: any): Promise<{ 
+    canList: boolean; 
+    reason?: string; 
+    maxModels?: number; 
+    currentModels?: number;
+    subscriptionTier?: string;
+  }> {
+    return await SubscriptionManager.canUserListModels(user);
   }
 
   static canUserApproveModel(user: any, modelId?: string): { canApprove: boolean; reason?: string } {
@@ -140,8 +203,9 @@ export class PaymentManager {
         return { success: false, error: 'Model is not available for purchase' };
       }
 
-      // Check if user already purchased
-      if (this.hasUserPurchasedModel(buyerId, modelId)) {
+      // Check if user already purchased using Firebase
+      const hasPurchased = await FirebaseDatabase.hasUserPurchasedModel(buyerId, modelId);
+      if (hasPurchased) {
         return { success: false, error: 'You already purchased this model' };
       }
 
@@ -157,7 +221,7 @@ export class PaymentManager {
           modelId: model.id,
           buyerId: buyerId,
           sellerId: model.owner,
-          customerId: this.getUserStripeCustomerId(buyerId)
+          customerId: await this.getUserStripeCustomerId(buyerId)
         }),
       });
 
@@ -180,12 +244,12 @@ export class PaymentManager {
   }
 
   // Complete purchase after successful Stripe payment
-  static completePurchaseAfterStripePayment(
+  static async completePurchaseAfterStripePayment(
     sessionId: string,
     modelId: string,
     buyerId: string,
     price: number
-  ): { success: boolean; transaction?: PurchaseTransaction; error?: string } {
+  ): Promise<{ success: boolean; transaction?: PurchaseTransaction; error?: string }> {
     try {
       const models = JSON.parse(localStorage.getItem('aiModels') || '[]');
       const model = models.find((m: any) => m.id === modelId);
@@ -194,17 +258,17 @@ export class PaymentManager {
         return { success: false, error: 'Model not found' };
       }
 
-      const commissionRate = this.getSellerCommissionRate(model.owner);
+      const commissionRate = await this.getSellerCommissionRate(model.owner);
       const platformCommission = price * commissionRate;
       const sellerRevenue = price - platformCommission;
 
-      // Create transaction record
-      const transaction: PurchaseTransaction = {
-        id: `purchase_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      // Create transaction record in Firebase
+      const transactionData: Omit<FirebaseTransaction, 'id' | 'createdAt'> = {
+        sessionId,
         modelId,
         modelName: model.name,
         buyerId,
-        buyerName: this.getUserName(buyerId),
+        buyerName: await this.getUserName(buyerId),
         sellerId: model.owner,
         sellerName: model.ownerName,
         price,
@@ -213,19 +277,36 @@ export class PaymentManager {
         commissionRate: commissionRate * 100,
         status: 'completed',
         purchasedAt: new Date().toISOString(),
+        type: 'model_purchase'
+      };
+
+      const transactionId = await FirebaseDatabase.createTransaction(transactionData);
+
+      // Create transaction object for response (matching existing interface)
+      const transaction: PurchaseTransaction = {
+        id: transactionId,
+        modelId,
+        modelName: model.name,
+        buyerId,
+        buyerName: transactionData.buyerName,
+        sellerId: model.owner,
+        sellerName: model.ownerName,
+        price,
+        sellerRevenue,
+        platformCommission,
+        commissionRate: commissionRate * 100,
+        status: 'completed',
+        purchasedAt: transactionData.purchasedAt,
         stripeSessionId: sessionId
       };
 
-      // Save transaction
-      this.saveTransaction(transaction);
-
-      // Update model download count
+      // Update model download count in localStorage (keep existing functionality)
       this.updateModelStats(modelId);
 
-      // Update buyer's purchase history
+      // Update buyer's purchase history in localStorage (keep existing functionality)
       this.updateBuyerStats(buyerId, price);
 
-      // Update seller's earnings
+      // Update seller's earnings in localStorage (keep existing functionality)
       this.updateSellerEarnings(model.owner, sellerRevenue);
 
       return { success: true, transaction };
@@ -274,74 +355,140 @@ export class PaymentManager {
     }
   }
 
-  static hasUserPurchasedModel(userId: string, modelId: string): boolean {
-    const transactions = this.getTransactions();
-    return transactions.some(tx => 
-      tx.buyerId === userId && 
-      tx.modelId === modelId && 
-      tx.status === 'completed'
-    );
-  }
-
-  static getUserPurchases(userId: string): PurchaseTransaction[] {
-    const transactions = this.getTransactions();
-    return transactions.filter(tx => 
-      tx.buyerId === userId && 
-      tx.status === 'completed'
-    ).sort((a, b) => new Date(b.purchasedAt).getTime() - new Date(a.purchasedAt).getTime());
-  }
-
-  static getSellerEarnings(sellerId: string): SellerEarnings {
-    const transactions = this.getTransactions();
-    const sellerTransactions = transactions.filter(tx => 
-      tx.sellerId === sellerId && 
-      tx.status === 'completed'
-    );
-
-    const totalRevenue = sellerTransactions.reduce((sum, tx) => sum + tx.sellerRevenue, 0);
-    const payouts = this.getSellerPayouts(sellerId);
-    const totalPayouts = payouts.reduce((sum, payout) => sum + payout.amount, 0);
-    const availableBalance = totalRevenue - totalPayouts;
-    const currentCommissionRate = this.getSellerCommissionRate(sellerId);
-
-    return {
-      totalRevenue,
-      availableBalance,
-      pendingPayout: 0,
-      totalPayouts,
-      commissionRate: currentCommissionRate * 100,
-      transactions: sellerTransactions
-    };
-  }
-
-  static requestPayout(sellerId: string, amount: number): { success: boolean; error?: string } {
-    const earnings = this.getSellerEarnings(sellerId);
-    
-    if (amount < 50) {
-      return { success: false, error: 'Minimum payout amount is $50' };
+  static async hasUserPurchasedModel(userId: string, modelId: string): Promise<boolean> {
+    try {
+      return await FirebaseDatabase.hasUserPurchasedModel(userId, modelId);
+    } catch (error) {
+      console.error('Error checking purchase status:', error);
+      // Fallback to localStorage check
+      const transactions = this.getTransactions();
+      return transactions.some(tx => 
+        tx.buyerId === userId && 
+        tx.modelId === modelId && 
+        tx.status === 'completed'
+      );
     }
-
-    if (amount > earnings.availableBalance) {
-      return { success: false, error: 'Insufficient available balance' };
-    }
-
-    const payout = {
-      id: `payout_${Date.now()}`,
-      sellerId,
-      amount,
-      requestedAt: new Date().toISOString(),
-      status: 'pending'
-    };
-
-    const payouts = JSON.parse(localStorage.getItem('payouts') || '[]');
-    payouts.push(payout);
-    localStorage.setItem('payouts', JSON.stringify(payouts));
-
-    this.updatePayoutRequest(sellerId, amount);
-
-    return { success: true };
   }
 
+  static async getUserPurchases(userId: string): Promise<PurchaseTransaction[]> {
+    try {
+      const firebaseTransactions = await FirebaseDatabase.getUserTransactions(userId, 'buyer');
+      
+      // Convert Firebase transactions to PurchaseTransaction format with proper typing
+      const purchaseTransactions: PurchaseTransaction[] = firebaseTransactions.map(tx => ({
+        id: tx.id,
+        modelId: tx.modelId,
+        modelName: tx.modelName,
+        buyerId: tx.buyerId,
+        buyerName: tx.buyerName,
+        sellerId: tx.sellerId,
+        sellerName: tx.sellerName,
+        price: tx.price,
+        sellerRevenue: tx.sellerRevenue,
+        platformCommission: tx.platformCommission,
+        commissionRate: tx.commissionRate,
+        status: tx.status,
+        purchasedAt: tx.purchasedAt,
+        stripeSessionId: tx.sessionId
+      }));
+
+      return purchaseTransactions;
+    } catch (error) {
+      console.error('Error getting user purchases from Firebase:', error);
+      // Fallback to localStorage
+      const transactions = this.getTransactions();
+      return transactions.filter(tx => 
+        tx.buyerId === userId && 
+        tx.status === 'completed'
+      ).sort((a, b) => new Date(b.purchasedAt).getTime() - new Date(a.purchasedAt).getTime());
+    }
+  }
+
+  static async getSellerEarnings(sellerId: string): Promise<SellerEarnings> {
+    try {
+      const earnings = await FirebaseDatabase.getUserEarnings(sellerId);
+      const transactions = await FirebaseDatabase.getUserTransactions(sellerId, 'seller');
+      
+      // Convert Firebase transactions to PurchaseTransaction format
+      const purchaseTransactions: PurchaseTransaction[] = transactions.map(tx => ({
+        id: tx.id,
+        modelId: tx.modelId,
+        modelName: tx.modelName,
+        buyerId: tx.buyerId,
+        buyerName: tx.buyerName,
+        sellerId: tx.sellerId,
+        sellerName: tx.sellerName,
+        price: tx.price,
+        sellerRevenue: tx.sellerRevenue,
+        platformCommission: tx.platformCommission,
+        commissionRate: tx.commissionRate,
+        status: tx.status,
+        purchasedAt: tx.purchasedAt,
+        stripeSessionId: tx.sessionId
+      }));
+
+      return {
+        ...earnings,
+        transactions: purchaseTransactions
+      };
+    } catch (error) {
+      console.error('Error getting seller earnings from Firebase:', error);
+      // Fallback to localStorage calculation
+      const transactions = this.getTransactions();
+      const sellerTransactions = transactions.filter(tx => 
+        tx.sellerId === sellerId && 
+        tx.status === 'completed'
+      );
+
+      const totalRevenue = sellerTransactions.reduce((sum, tx) => sum + tx.sellerRevenue, 0);
+      const payouts = this.getSellerPayouts(sellerId);
+      const totalPayouts = payouts.reduce((sum, payout) => sum + payout.amount, 0);
+      const availableBalance = totalRevenue - totalPayouts;
+      const currentCommissionRate = await this.getSellerCommissionRate(sellerId);
+
+      return {
+        totalRevenue,
+        availableBalance,
+        pendingPayout: 0,
+        totalPayouts,
+        commissionRate: currentCommissionRate * 100,
+        transactions: sellerTransactions
+      };
+    }
+  }
+
+  static async requestPayout(sellerId: string, amount: number): Promise<{ success: boolean; error?: string }> {
+    try {
+      const earnings = await this.getSellerEarnings(sellerId);
+      
+      if (amount < 50) {
+        return { success: false, error: 'Minimum payout amount is $50' };
+      }
+
+      if (amount > earnings.availableBalance) {
+        return { success: false, error: 'Insufficient available balance' };
+      }
+
+      // Create payout in Firebase
+      await FirebaseDatabase.createPayout({
+        sellerId,
+        amount,
+        requestedAt: new Date().toISOString(),
+        processedAt: null,
+        status: 'pending'
+      });
+
+      // Update localStorage for backward compatibility
+      this.updatePayoutRequest(sellerId, amount);
+
+      return { success: true };
+    } catch (error) {
+      console.error('Error requesting payout:', error);
+      return { success: false, error: 'Failed to request payout' };
+    }
+  }
+
+  // Helper methods for localStorage fallback
   private static getTransactions(): PurchaseTransaction[] {
     return JSON.parse(localStorage.getItem('purchaseTransactions') || '[]');
   }
@@ -352,23 +499,31 @@ export class PaymentManager {
     localStorage.setItem('purchaseTransactions', JSON.stringify(transactions));
   }
 
-  private static getUserName(userId: string): string {
-    const users = JSON.parse(localStorage.getItem('users') || '[]');
-    const user = users.find((u: any) => u.id === userId);
-    return user?.displayName || user?.username || 'Unknown User';
+  private static async getUserName(userId: string): Promise<string> {
+    try {
+      // Try to get from Firebase first
+      const { userService } = await import('./firebase');
+      const user = await userService.getUserById(userId);
+      return user?.displayName || user?.username || 'Unknown User';
+    } catch (error) {
+      // Fallback to localStorage
+      const users = JSON.parse(localStorage.getItem('users') || '[]');
+      const user = users.find((u: any) => u.id === userId);
+      return user?.displayName || user?.username || 'Unknown User';
+    }
   }
 
-  private static getUserStripeCustomerId(userId: string): string | undefined {
-    const users = JSON.parse(localStorage.getItem('users') || '[]');
-    const user = users.find((u: any) => u.id === userId);
-    return user?.stripeCustomerId;
-  }
-
-  private static getUserApprovedModelsCount(userId: string): number {
-    const models = JSON.parse(localStorage.getItem('aiModels') || '[]');
-    return models.filter((model: any) => 
-      model.owner === userId && model.status === 'approved'
-    ).length;
+  private static async getUserStripeCustomerId(userId: string): Promise<string | undefined> {
+    try {
+      const { userService } = await import('./firebase');
+      const user = await userService.getUserById(userId);
+      return user?.stripeCustomerId;
+    } catch (error) {
+      // Fallback to localStorage
+      const users = JSON.parse(localStorage.getItem('users') || '[]');
+      const user = users.find((u: any) => u.id === userId);
+      return user?.stripeCustomerId;
+    }
   }
 
   private static updateModelStats(modelId: string) {
@@ -475,10 +630,10 @@ export class PaymentManager {
     return this.config;
   }
 
-  // Backward compatibility methods
+  // FIXED: Backward compatibility methods - made synchronous
   static recordSale(modelId: string, sellerId: string, price: number): void {
-    // For backward compatibility - use the old direct purchase method
-    const result = this.processDirectPurchase(modelId, 'anonymous_buyer', price);
+    // For backward compatibility - use the synchronous direct purchase method
+    const result = this.processDirectPurchaseSync(modelId, 'anonymous_buyer', price);
     if (!result.success) {
       console.error('Failed to record sale:', result.error);
     }
@@ -492,8 +647,8 @@ export class PaymentManager {
     return { success: true };
   }
 
-  // Legacy method for direct purchase (without payment)
-  static processDirectPurchase(
+  // Synchronous version for backward compatibility
+  private static processDirectPurchaseSync(
     modelId: string, 
     buyerId: string, 
     price: number
@@ -510,11 +665,18 @@ export class PaymentManager {
         return { success: false, error: 'Model is not available for purchase' };
       }
 
-      if (this.hasUserPurchasedModel(buyerId, modelId)) {
+      // Check if user already purchased using localStorage
+      const hasPurchased = this.getTransactions().some(tx => 
+        tx.buyerId === buyerId && 
+        tx.modelId === modelId && 
+        tx.status === 'completed'
+      );
+      
+      if (hasPurchased) {
         return { success: false, error: 'You already purchased this model' };
       }
 
-      const commissionRate = this.getSellerCommissionRate(model.owner);
+      const commissionRate = 0.20; // Default commission for sync version
       const platformCommission = price * commissionRate;
       const sellerRevenue = price - platformCommission;
 
@@ -523,7 +685,7 @@ export class PaymentManager {
         modelId,
         modelName: model.name,
         buyerId,
-        buyerName: this.getUserName(buyerId),
+        buyerName: 'Unknown User', // Simplified for sync version
         sellerId: model.owner,
         sellerName: model.ownerName,
         price,
@@ -534,7 +696,9 @@ export class PaymentManager {
         purchasedAt: new Date().toISOString()
       };
 
+      // Save to localStorage only for sync version
       this.saveTransaction(transaction);
+
       this.updateModelStats(modelId);
       this.updateBuyerStats(buyerId, price);
       this.updateSellerEarnings(model.owner, sellerRevenue);
@@ -545,5 +709,127 @@ export class PaymentManager {
       console.error('Direct purchase processing error:', error);
       return { success: false, error: 'Purchase failed' };
     }
+  }
+
+  // Legacy method for direct purchase (without payment) - async version
+  static async processDirectPurchase(
+    modelId: string, 
+    buyerId: string, 
+    price: number
+  ): Promise<{ success: boolean; transaction?: PurchaseTransaction; error?: string }> {
+    try {
+      const models = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      const model = models.find((m: any) => m.id === modelId);
+      
+      if (!model) {
+        return { success: false, error: 'Model not found' };
+      }
+
+      if (model.status !== 'approved') {
+        return { success: false, error: 'Model is not available for purchase' };
+      }
+
+      const hasPurchased = await this.hasUserPurchasedModel(buyerId, modelId);
+      if (hasPurchased) {
+        return { success: false, error: 'You already purchased this model' };
+      }
+
+      const commissionRate = await this.getSellerCommissionRate(model.owner);
+      const platformCommission = price * commissionRate;
+      const sellerRevenue = price - platformCommission;
+
+      const transaction: PurchaseTransaction = {
+        id: `purchase_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        modelId,
+        modelName: model.name,
+        buyerId,
+        buyerName: await this.getUserName(buyerId),
+        sellerId: model.owner,
+        sellerName: model.ownerName,
+        price,
+        sellerRevenue,
+        platformCommission,
+        commissionRate: commissionRate * 100,
+        status: 'completed',
+        purchasedAt: new Date().toISOString()
+      };
+
+      // Save to both Firebase and localStorage for backward compatibility
+      try {
+        await FirebaseDatabase.createTransaction({
+          sessionId: undefined,
+          modelId,
+          modelName: model.name,
+          buyerId,
+          buyerName: transaction.buyerName,
+          sellerId: model.owner,
+          sellerName: model.ownerName,
+          price,
+          sellerRevenue,
+          platformCommission,
+          commissionRate: commissionRate * 100,
+          status: 'completed',
+          purchasedAt: transaction.purchasedAt,
+          type: 'model_purchase'
+        });
+      } catch (error) {
+        console.error('Failed to save transaction to Firebase, using localStorage only:', error);
+        this.saveTransaction(transaction);
+      }
+
+      this.updateModelStats(modelId);
+      this.updateBuyerStats(buyerId, price);
+      this.updateSellerEarnings(model.owner, sellerRevenue);
+
+      return { success: true, transaction };
+
+    } catch (error) {
+      console.error('Direct purchase processing error:', error);
+      return { success: false, error: 'Purchase failed' };
+    }
+  }
+
+  // Helper method to get user's approved models count synchronously
+  private static getUserApprovedModelsCountSync(userId: string): number {
+    try {
+      const models = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      return models.filter((model: any) => 
+        model.owner === userId && model.status === 'approved'
+      ).length;
+    } catch (error) {
+      console.error('Error getting user models count:', error);
+      return 0;
+    }
+  }
+
+  // Synchronous version for backward compatibility
+  static getUserPurchasesSync(userId: string): PurchaseTransaction[] {
+    const transactions = this.getTransactions();
+    return transactions.filter(tx => 
+      tx.buyerId === userId && 
+      tx.status === 'completed'
+    ).sort((a, b) => new Date(b.purchasedAt).getTime() - new Date(a.purchasedAt).getTime());
+  }
+
+  static getSellerEarningsSync(sellerId: string): SellerEarnings {
+    const transactions = this.getTransactions();
+    const sellerTransactions = transactions.filter(tx => 
+      tx.sellerId === sellerId && 
+      tx.status === 'completed'
+    );
+
+    const totalRevenue = sellerTransactions.reduce((sum, tx) => sum + tx.sellerRevenue, 0);
+    const payouts = this.getSellerPayouts(sellerId);
+    const totalPayouts = payouts.reduce((sum, payout) => sum + payout.amount, 0);
+    const availableBalance = totalRevenue - totalPayouts;
+
+    return {
+      totalRevenue,
+      availableBalance,
+      pendingPayout: 0,
+      totalPayouts,
+      commissionRate: 20, // Default commission rate
+      transactions: sellerTransactions
+    };
   }
 }

@@ -1,3 +1,4 @@
+// app/payment/success/page.tsx - UPDATED VERSION
 'use client';
 
 import { useEffect, useState, Suspense } from 'react';
@@ -7,6 +8,10 @@ import { PrimaryButton } from '@/components/ui';
 import Link from 'next/link';
 import { PaymentManager } from '@/lib/payment-utils';
 import { SubscriptionManager } from '@/lib/subscription-utils';
+import { FirebaseDatabase } from '@/lib/firebase-database';
+
+// Import the Subscription type to ensure type safety
+import type { Subscription } from '@/lib/subscription-utils';
 
 // Main content component that uses useSearchParams
 function PaymentSuccessContent() {
@@ -38,8 +43,8 @@ function PaymentSuccessContent() {
       const result = await PaymentManager.verifyStripePayment(sessionId);
       
       if (result.success && result.isPaid && result.modelId && result.buyerId && result.amount) {
-        // Complete the purchase
-        const purchaseResult = PaymentManager.completePurchaseAfterStripePayment(
+        // Complete the purchase using the updated PaymentManager
+        const purchaseResult = await PaymentManager.completePurchaseAfterStripePayment(
           sessionId,
           result.modelId,
           result.buyerId,
@@ -108,15 +113,14 @@ function PaymentSuccessContent() {
         throw new Error('No plan information found in session');
       }
 
-      // Create subscription record
-      const subscriptionData = {
-        id: `sub_${Date.now()}`,
+      // Create subscription record in Firebase with proper typing
+      const subscriptionData: Omit<Subscription, 'id'> = {
         stripeSubscriptionId: session.subscription?.id || session.id,
         stripeCustomerId: session.customer,
         planId: planId,
-        type: planType,
+        type: planType as 'seller' | 'buyer', // Ensure proper type casting
         amount: amount,
-        status: 'active',
+        status: 'active' as const, // Use const assertion to ensure type safety
         purchasedAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
         paymentMethod: 'card',
@@ -125,10 +129,16 @@ function PaymentSuccessContent() {
         nextBillingDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
       };
 
-      // Update current user
+      // Create subscription in Firebase
+      const subscriptionId = await SubscriptionManager.createUserSubscription(currentUser.id, subscriptionData);
+
+      // Update current user in localStorage for backward compatibility
       const updatedUser = {
         ...currentUser,
-        subscription: subscriptionData,
+        subscription: {
+          ...subscriptionData,
+          id: subscriptionId
+        },
         role: planType === 'seller' ? (currentUser.role === 'both' ? 'both' : 'seller') : currentUser.role,
         stripeCustomerId: session.customer,
         updatedAt: new Date().toISOString()
@@ -137,33 +147,13 @@ function PaymentSuccessContent() {
       // Save updated user to localStorage
       localStorage.setItem('currentUser', JSON.stringify(updatedUser));
 
-      // Update users array in localStorage
+      // Update users array in localStorage for backward compatibility
       const users = JSON.parse(localStorage.getItem('users') || '[]');
       const userIndex = users.findIndex((u: any) => u.id === currentUser.id);
       if (userIndex !== -1) {
         users[userIndex] = updatedUser;
         localStorage.setItem('users', JSON.stringify(users));
       }
-
-      // Save to subscriptions list
-      const userSubscriptions = JSON.parse(localStorage.getItem('userSubscriptions') || '[]');
-      const existingSubIndex = userSubscriptions.findIndex((sub: any) => 
-        sub.userId === currentUser.id && sub.status === 'active'
-      );
-      
-      if (existingSubIndex !== -1) {
-        userSubscriptions[existingSubIndex] = {
-          ...subscriptionData,
-          userId: currentUser.id
-        };
-      } else {
-        userSubscriptions.push({
-          ...subscriptionData,
-          userId: currentUser.id
-        });
-      }
-      
-      localStorage.setItem('userSubscriptions', JSON.stringify(userSubscriptions));
 
       // Clear selected plan
       localStorage.removeItem('selectedPlan');

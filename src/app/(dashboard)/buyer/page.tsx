@@ -1,3 +1,4 @@
+// app/dashboard/buyer/page.tsx - UPDATED VERSION
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -66,9 +67,10 @@ export default function BuyerDashboard() {
     loadPurchaseData(user.id);
   }, [router]);
 
-  const loadPurchaseData = (userId: string) => {
+  const loadPurchaseData = async (userId: string) => {
     try {
-      const userPurchases = PaymentManager.getUserPurchases(userId);
+      // Use await with the async PaymentManager method
+      const userPurchases = await PaymentManager.getUserPurchases(userId);
       setPurchases(userPurchases);
 
       const total = userPurchases.reduce((sum: number, purchase: Purchase) => sum + purchase.price, 0);
@@ -121,12 +123,30 @@ export default function BuyerDashboard() {
     }).format(amount);
   };
 
+  const refreshData = () => {
+    if (currentUser) {
+      setLoading(true);
+      loadPurchaseData(currentUser.id);
+    }
+  };
+
   if (!isClient || !currentUser) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500 mx-auto"></div>
           <p className="mt-4 text-slate-300">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500 mx-auto"></div>
+          <p className="mt-4 text-slate-300">Loading your purchases...</p>
         </div>
       </div>
     );
@@ -141,13 +161,23 @@ export default function BuyerDashboard() {
         </div>
 
         <div className="relative z-10 py-8 px-4 sm:px-6 lg:px-8 space-y-8">
+          {/* Header Section */}
           <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between">
               <div className="flex-1">
-                <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent">
-                  Explorer Dashboard
-                </h1>
-                <p className="mt-2 text-slate-300">
+                <div className="flex items-center gap-4 mb-4">
+                  <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent">
+                    Explorer Dashboard
+                  </h1>
+                  <button
+                    onClick={refreshData}
+                    className="text-cyan-400 hover:text-cyan-300 transition-colors duration-200"
+                    title="Refresh data"
+                  >
+                    🔄
+                  </button>
+                </div>
+                <p className="text-slate-300">
                   Welcome back, {currentUser.displayName}! Manage your purchases and subscriptions.
                   {currentUser.role === 'both' && (
                     <span className="text-cyan-400 font-medium">
@@ -193,6 +223,7 @@ export default function BuyerDashboard() {
             </div>
           </div>
 
+          {/* Stats Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6">
             {[
               { 
@@ -251,6 +282,7 @@ export default function BuyerDashboard() {
             ))}
           </div>
 
+          {/* Main Content Grid */}
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
             {recentPurchases.length > 0 && (
               <div className="xl:col-span-2 bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
@@ -301,6 +333,7 @@ export default function BuyerDashboard() {
               </div>
             )}
 
+            {/* Quick Actions */}
             <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
               <h2 className="text-xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent mb-6">
                 Quick Actions
@@ -350,6 +383,7 @@ export default function BuyerDashboard() {
             </div>
           </div>
 
+          {/* Empty State */}
           {purchases.length === 0 && (
             <div className="bg-gradient-to-r from-slate-800/60 to-cyan-900/20 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
               <h2 className="text-xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent mb-6">
@@ -394,6 +428,7 @@ export default function BuyerDashboard() {
             </div>
           )}
 
+          {/* Purchased Models Collection */}
           {purchases.length > 0 && (
             <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
               <h2 className="text-xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent mb-6">
