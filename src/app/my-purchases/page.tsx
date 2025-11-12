@@ -1,3 +1,4 @@
+// app/my-purchases/page.tsx - UPDATED VERSION
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -62,12 +63,15 @@ export default function MyPurchasesPage() {
     }
   }, []);
 
-  const loadPurchases = (userId: string) => {
+  const loadPurchases = async (userId: string) => {
     try {
-      const userPurchases = PaymentManager.getUserPurchases(userId);
+      // ADDED AWAIT - This is now an async function
+      const userPurchases = await PaymentManager.getUserPurchases(userId);
       setPurchases(userPurchases);
 
       const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      
+      // FIXED: userPurchases is now properly typed as Purchase[]
       const purchasedModelsData = userPurchases.map((purchase: Purchase) => 
         allModels.find((model: AIModel) => model.id === purchase.modelId)
       ).filter((model): model is AIModel => model !== undefined);

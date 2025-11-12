@@ -1,4 +1,4 @@
-// app/marketplace/page.tsx
+// app/marketplace/page.tsx - UPDATED VERSION
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -40,6 +40,7 @@ export default function MarketplacePage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [purchaseLoading, setPurchaseLoading] = useState<string | null>(null);
+  const [purchasedModels, setPurchasedModels] = useState<Set<string>>(new Set());
   const router = useRouter();
 
   useEffect(() => {
@@ -48,6 +49,25 @@ export default function MarketplacePage() {
     
     loadModels();
   }, []);
+
+  // Load user's purchased models
+  useEffect(() => {
+    if (currentUser) {
+      loadPurchasedModels();
+    }
+  }, [currentUser]);
+
+  const loadPurchasedModels = async () => {
+    if (!currentUser) return;
+    
+    try {
+      const userPurchases = await PaymentManager.getUserPurchases(currentUser.id);
+      const purchasedModelIds = new Set(userPurchases.map(purchase => purchase.modelId));
+      setPurchasedModels(purchasedModelIds);
+    } catch (error) {
+      console.error('Error loading purchased models:', error);
+    }
+  };
 
   const getActiveModels = (models: AIModel[]) => {
     return models.filter(model => {
@@ -101,8 +121,8 @@ export default function MarketplacePage() {
       return;
     }
 
-    const hasPurchased = PaymentManager.hasUserPurchasedModel(currentUser.id, model.id);
-    if (hasPurchased) {
+    // Check if already purchased using the local state
+    if (purchasedModels.has(model.id)) {
       alert(`✅ You already purchased "${model.name}"! You can download it from your purchases.`);
       return;
     }
@@ -233,7 +253,8 @@ export default function MarketplacePage() {
                 const expirationDate = new Date(uploadDate.getTime() + 30 * 24 * 60 * 60 * 1000);
                 const daysRemaining = Math.ceil((expirationDate.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
                 
-                const hasPurchased = currentUser ? PaymentManager.hasUserPurchasedModel(currentUser.id, model.id) : false;
+                // Use the pre-loaded purchased models state
+                const hasPurchased = purchasedModels.has(model.id);
                 
                 return (
                   <div

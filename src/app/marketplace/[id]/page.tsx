@@ -1,3 +1,4 @@
+// app/marketplace/[id]/page.tsx - UPDATED VERSION
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -63,7 +64,7 @@ export default function ModelDetailsPage() {
       const foundModel = allModels.find((m: any) => m.id === modelId) as AIModel;
       
       if (foundModel) {
-        processModel(foundModel);
+        await processModel(foundModel); // ADDED AWAIT
         return;
       }
       
@@ -77,7 +78,7 @@ export default function ModelDetailsPage() {
         return;
       }
       
-      processModel(localFoundModel);
+      await processModel(localFoundModel); // ADDED AWAIT
       
     } catch (error) {
       console.error('❌ Error loading from Firestore:', error);
@@ -92,11 +93,11 @@ export default function ModelDetailsPage() {
         return;
       }
       
-      processModel(localFoundModel);
+      await processModel(localFoundModel); // ADDED AWAIT
     }
   };
 
-  const processModel = (model: AIModel) => {
+  const processModel = async (model: AIModel) => { // ADDED ASYNC
     if (model.status !== 'approved') {
       setError('This model is not available for viewing');
       setLoading(false);
@@ -109,7 +110,8 @@ export default function ModelDetailsPage() {
     setIsLiked(userLikes[model.id] === true);
 
     if (currentUser) {
-      const purchased = PaymentManager.hasUserPurchasedModel(currentUser.id, model.id);
+      // FIXED: Added await to handle the Promise
+      const purchased = await PaymentManager.hasUserPurchasedModel(currentUser.id, model.id);
       setHasPurchased(purchased);
     }
 
@@ -218,7 +220,8 @@ export default function ModelDetailsPage() {
 
     if (!model) return;
 
-    const hasPurchased = PaymentManager.hasUserPurchasedModel(currentUser.id, model.id);
+    // FIXED: Added await to handle the Promise
+    const hasPurchased = await PaymentManager.hasUserPurchasedModel(currentUser.id, model.id);
     if (hasPurchased) {
       alert(`✅ You already purchased "${model.name}"! You can download it from your purchases.`);
       return;
