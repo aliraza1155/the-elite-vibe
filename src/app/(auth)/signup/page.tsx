@@ -175,7 +175,7 @@ export default function SignupPage() {
 
       // Redirect to login page immediately with success message
       setTimeout(() => {
-        router.push('/auth/login?message=verify-email');
+        router.push('/login');
       }, 3000);
 
     } catch (error: any) {
