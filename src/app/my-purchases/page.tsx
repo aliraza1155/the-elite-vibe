@@ -1,4 +1,3 @@
-// app/my-purchases/page.tsx - UPDATED VERSION
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -18,6 +17,7 @@ interface Purchase {
   price: number;
   purchasedAt: string;
   downloadUrl?: string;
+  firestoreId?: string;
 }
 
 interface AIModel {
@@ -48,8 +48,10 @@ export default function MyPurchasesPage() {
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [purchasedModels, setPurchasedModels] = useState<AIModel[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [firebaseStatus, setFirebaseStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
   const router = useRouter();
 
   useEffect(() => {
@@ -65,24 +67,40 @@ export default function MyPurchasesPage() {
 
   const loadPurchases = async (userId: string) => {
     try {
-      // ADDED AWAIT - This is now an async function
-      const userPurchases = await PaymentManager.getUserPurchases(userId);
-      setPurchases(userPurchases);
+      setLoading(true);
+      setFirebaseStatus('loading');
+      console.log('🔄 Loading purchases with Firebase integration...');
 
-      const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      // Load purchases from Firebase with fallback
+      const userPurchases = await PaymentManager.getUserPurchases(userId);
+      console.log('✅ Loaded purchases from Firebase:', userPurchases.length);
       
-      // FIXED: userPurchases is now properly typed as Purchase[]
+      setPurchases(userPurchases);
+      setFirebaseStatus('loaded');
+
+      // Load purchased models data
+      const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
       const purchasedModelsData = userPurchases.map((purchase: Purchase) => 
         allModels.find((model: AIModel) => model.id === purchase.modelId)
       ).filter((model): model is AIModel => model !== undefined);
       
       setPurchasedModels(purchasedModelsData);
+      
     } catch (error) {
-      console.error('Error loading purchases:', error);
+      console.error('❌ Error loading purchases:', error);
       setPurchases([]);
       setPurchasedModels([]);
+      setFirebaseStatus('error');
     } finally {
       setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  const refreshPurchases = async () => {
+    if (currentUser) {
+      setRefreshing(true);
+      await loadPurchases(currentUser.id);
     }
   };
 
@@ -90,9 +108,29 @@ export default function MyPurchasesPage() {
     return purchases.reduce((total, purchase) => total + purchase.price, 0);
   };
 
-  const handleDownload = (modelId: string, modelName: string) => {
-    alert(`Downloading ${modelName}...`);
-    console.log(`Download requested for model: ${modelId}`);
+  const handleDownload = async (modelId: string, modelName: string) => {
+    try {
+      // Verify purchase using Firebase
+      if (currentUser) {
+        const hasPurchased = await PaymentManager.hasUserPurchasedModel(currentUser.id, modelId);
+        if (!hasPurchased) {
+          alert('❌ You have not purchased this model. Please complete your purchase first.');
+          return;
+        }
+      }
+
+      alert(`📥 Downloading ${modelName}...`);
+      console.log(`Download requested for model: ${modelId}`);
+      
+      // Simulate download process
+      setTimeout(() => {
+        alert(`✅ ${modelName} downloaded successfully!`);
+      }, 1000);
+      
+    } catch (error) {
+      console.error('Download error:', error);
+      alert('❌ Download failed. Please try again.');
+    }
   };
 
   const formatCurrency = (amount: number) => {
@@ -166,6 +204,14 @@ export default function MyPurchasesPage() {
     return colors[niche] || colors.other;
   };
 
+  const getFirebaseStats = () => {
+    const firebasePurchases = purchases.filter(p => p.firestoreId);
+    return {
+      count: firebasePurchases.length,
+      percentage: purchases.length > 0 ? Math.round((firebasePurchases.length / purchases.length) * 100) : 0
+    };
+  };
+
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
@@ -187,6 +233,8 @@ export default function MyPurchasesPage() {
     );
   }
 
+  const firebaseStats = getFirebaseStats();
+
   return (
     <AuthGuard requireAuth>
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
@@ -198,6 +246,24 @@ export default function MyPurchasesPage() {
         <Header />
         
         <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          {/* Refresh Button */}
+          <div className="flex justify-end mb-6">
+            <button
+              onClick={refreshPurchases}
+              disabled={refreshing}
+              className="bg-gradient-to-r from-cyan-500 to-blue-500 text-white px-4 py-2 rounded-xl hover:from-cyan-600 hover:to-blue-600 transition-all duration-200 font-medium shadow-lg shadow-cyan-500/25 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {refreshing ? (
+                <span className="flex items-center">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  Refreshing...
+                </span>
+              ) : (
+                '🔄 Refresh Data'
+              )}
+            </button>
+          </div>
+
           <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6 mb-8">
             <div>
               <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent">
@@ -206,6 +272,19 @@ export default function MyPurchasesPage() {
               <p className="text-slate-300 mt-2">
                 All your purchased AI models in one place
               </p>
+              
+              {/* Firebase Status */}
+              {firebaseStatus === 'loaded' && (
+                <div className="mt-2 flex items-center space-x-2">
+                  <div className={`w-2 h-2 rounded-full ${
+                    firebaseStats.percentage === 100 ? 'bg-emerald-500' : 
+                    firebaseStats.percentage > 50 ? 'bg-amber-500' : 'bg-rose-500'
+                  }`}></div>
+                  <span className="text-xs text-slate-400">
+                    {firebaseStats.percentage}% stored in secure database
+                  </span>
+                </div>
+              )}
             </div>
             <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
               <div className="text-right">
@@ -269,6 +348,9 @@ export default function MyPurchasesPage() {
             <div className="text-center py-12">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500 mx-auto"></div>
               <p className="mt-4 text-slate-400">Loading your collection...</p>
+              {firebaseStatus === 'loading' && (
+                <p className="text-sm text-slate-500 mt-2">Syncing with secure database...</p>
+              )}
             </div>
           ) : purchases.length === 0 ? (
             <div className="text-center py-12">
@@ -304,6 +386,11 @@ export default function MyPurchasesPage() {
                           <div className="absolute top-3 right-3 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-3 py-1 rounded-full text-xs font-medium backdrop-blur-sm">
                             Purchased
                           </div>
+                          {purchase.firestoreId && (
+                            <div className="absolute top-3 left-3 bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-2 py-1 rounded-full text-xs font-medium backdrop-blur-sm">
+                              🔒 Secure
+                            </div>
+                          )}
                         </div>
 
                         <div className="p-4">
@@ -369,6 +456,9 @@ export default function MyPurchasesPage() {
                             Purchase Date
                           </th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
+                            Status
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
                             Actions
                           </th>
                         </tr>
@@ -404,6 +494,16 @@ export default function MyPurchasesPage() {
                                   {new Date(purchase.purchasedAt).toLocaleTimeString()}
                                 </div>
                               </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <div className="flex items-center space-x-2">
+                                  <div className={`w-2 h-2 rounded-full ${
+                                    purchase.firestoreId ? 'bg-emerald-500' : 'bg-amber-500'
+                                  }`}></div>
+                                  <span className="text-xs text-slate-400">
+                                    {purchase.firestoreId ? 'Secure' : 'Local'}
+                                  </span>
+                                </div>
+                              </td>
                               <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-3">
                                 <button
                                   onClick={() => router.push(`/marketplace/${purchase.modelId}`)}
@@ -428,7 +528,7 @@ export default function MyPurchasesPage() {
               )}
 
               <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-2xl shadow-lg p-6">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-center">
                   <div>
                     <div className="text-2xl font-bold text-cyan-400">{purchases.length}</div>
                     <div className="text-sm text-slate-400">Total Items</div>
@@ -445,9 +545,15 @@ export default function MyPurchasesPage() {
                   </div>
                   <div>
                     <div className="text-2xl font-bold text-amber-400">
-                      {Math.round(getTotalSpent() / purchases.length) || 0}
+                      {purchases.length > 0 ? formatCurrency(getTotalSpent() / purchases.length) : formatCurrency(0)}
                     </div>
                     <div className="text-sm text-slate-400">Avg. Price</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-blue-400">
+                      {firebaseStats.percentage}%
+                    </div>
+                    <div className="text-sm text-slate-400">Secure Storage</div>
                   </div>
                 </div>
               </div>

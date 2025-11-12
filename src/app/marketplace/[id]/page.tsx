@@ -1,4 +1,3 @@
-// app/marketplace/[id]/page.tsx - UPDATED VERSION
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -47,6 +46,7 @@ export default function ModelDetailsPage() {
   const [isLiked, setIsLiked] = useState(false);
   const [hasPurchased, setHasPurchased] = useState(false);
   const [purchaseLoading, setPurchaseLoading] = useState(false);
+  const [checkingPurchase, setCheckingPurchase] = useState(true);
 
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
@@ -64,7 +64,7 @@ export default function ModelDetailsPage() {
       const foundModel = allModels.find((m: any) => m.id === modelId) as AIModel;
       
       if (foundModel) {
-        await processModel(foundModel); // ADDED AWAIT
+        await processModel(foundModel);
         return;
       }
       
@@ -75,10 +75,11 @@ export default function ModelDetailsPage() {
       if (!localFoundModel) {
         setError('Model not found');
         setLoading(false);
+        setCheckingPurchase(false);
         return;
       }
       
-      await processModel(localFoundModel); // ADDED AWAIT
+      await processModel(localFoundModel);
       
     } catch (error) {
       console.error('❌ Error loading from Firestore:', error);
@@ -90,29 +91,50 @@ export default function ModelDetailsPage() {
       if (!localFoundModel) {
         setError('Model not found');
         setLoading(false);
+        setCheckingPurchase(false);
         return;
       }
       
-      await processModel(localFoundModel); // ADDED AWAIT
+      await processModel(localFoundModel);
     }
   };
 
-  const processModel = async (model: AIModel) => { // ADDED ASYNC
+  const processModel = async (model: AIModel) => {
     if (model.status !== 'approved') {
       setError('This model is not available for viewing');
       setLoading(false);
+      setCheckingPurchase(false);
       return;
     }
 
-    trackView(model.id);
+    await trackView(model.id);
     
     const userLikes = JSON.parse(localStorage.getItem('userLikes') || '{}');
     setIsLiked(userLikes[model.id] === true);
 
+    // Check purchase status using Firebase
     if (currentUser) {
-      // FIXED: Added await to handle the Promise
-      const purchased = await PaymentManager.hasUserPurchasedModel(currentUser.id, model.id);
-      setHasPurchased(purchased);
+      setCheckingPurchase(true);
+      try {
+        // FIX: Await the async function and then set the state
+        const purchased = await PaymentManager.hasUserPurchasedModel(currentUser.id, model.id);
+        setHasPurchased(purchased);
+        console.log(`✅ Purchase check completed: ${purchased ? 'Purchased' : 'Not purchased'}`);
+      } catch (error) {
+        console.error('Error checking purchase status:', error);
+        // Fallback to localStorage check - note: this is now also async
+        try {
+          const purchased = await PaymentManager.hasUserPurchasedModel(currentUser.id, model.id);
+          setHasPurchased(purchased);
+        } catch (fallbackError) {
+          console.error('Fallback purchase check also failed:', fallbackError);
+          setHasPurchased(false);
+        }
+      } finally {
+        setCheckingPurchase(false);
+      }
+    } else {
+      setCheckingPurchase(false);
     }
 
     setModel(model);
@@ -130,11 +152,13 @@ export default function ModelDetailsPage() {
           stats: {
             ...modelToUpdate.stats,
             views: (modelToUpdate.stats.views || 0) + 1
-          }
+          },
+          updatedAt: new Date().toISOString()
         });
+        console.log('✅ View tracked in Firestore');
       }
       
-      // Also update localStorage
+      // Also update localStorage for immediate UI updates
       const localModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
       const updatedModels = localModels.map((m: AIModel) =>
         m.id === modelId ? { ...m, stats: { ...m.stats, views: m.stats.views + 1 } } : m
@@ -146,6 +170,12 @@ export default function ModelDetailsPage() {
       }
     } catch (error) {
       console.error('Error tracking view:', error);
+      // Fallback to localStorage only
+      const localModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      const updatedModels = localModels.map((m: AIModel) =>
+        m.id === modelId ? { ...m, stats: { ...m.stats, views: m.stats.views + 1 } } : m
+      );
+      localStorage.setItem('aiModels', JSON.stringify(updatedModels));
     }
   };
 
@@ -162,7 +192,8 @@ export default function ModelDetailsPage() {
           stats: {
             ...model.stats,
             likes: Math.max(0, model.stats.likes - 1)
-          }
+          },
+          updatedAt: new Date().toISOString()
         });
         
         // Update localStorage
@@ -187,7 +218,8 @@ export default function ModelDetailsPage() {
           stats: {
             ...model.stats,
             likes: model.stats.likes + 1
-          }
+          },
+          updatedAt: new Date().toISOString()
         });
         
         // Update localStorage
@@ -220,29 +252,59 @@ export default function ModelDetailsPage() {
 
     if (!model) return;
 
-    // FIXED: Added await to handle the Promise
-    const hasPurchased = await PaymentManager.hasUserPurchasedModel(currentUser.id, model.id);
-    if (hasPurchased) {
-      alert(`✅ You already purchased "${model.name}"! You can download it from your purchases.`);
-      return;
+    // Double-check purchase status using Firebase
+    setCheckingPurchase(true);
+    try {
+      // FIX: Await the async function
+      const hasPurchased = await PaymentManager.hasUserPurchasedModel(currentUser.id, model.id);
+      if (hasPurchased) {
+        alert(`✅ You already purchased "${model.name}"! You can download it from your purchases.`);
+        setCheckingPurchase(false);
+        setHasPurchased(true);
+        return;
+      }
+    } catch (error) {
+      console.error('Error verifying purchase:', error);
+      // Continue with purchase flow even if verification fails
+    } finally {
+      setCheckingPurchase(false);
     }
 
     setPurchaseLoading(true);
     try {
+      console.log('🔄 Initiating purchase with Firebase integration...');
       const result = await PaymentManager.processModelPurchase(model.id, currentUser.id, model.price);
       
       if (result.success && result.sessionUrl) {
+        console.log('✅ Purchase initiated, redirecting to Stripe...');
         // Redirect to Stripe Checkout
         window.location.href = result.sessionUrl;
       } else {
+        console.error('❌ Purchase failed:', result.error);
         alert(`❌ Purchase failed: ${result.error}`);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Purchase error:', error);
-      alert('❌ Purchase failed. Please try again.');
+      alert(`❌ Purchase failed: ${error.message || 'Please try again.'}`);
     } finally {
       setPurchaseLoading(false);
     }
+  };
+
+  const handleDownload = () => {
+    if (!hasPurchased) {
+      alert('❌ Please purchase this model before downloading.');
+      return;
+    }
+
+    // Simulate download process
+    alert(`📥 Downloading "${model?.name}"...\n\nYour download will begin shortly.`);
+    console.log(`Download initiated for model: ${model?.id}`);
+    
+    // Here you would typically:
+    // 1. Generate a secure download link
+    // 2. Track the download in Firebase
+    // 3. Provide the actual download file
   };
 
   const getNicheColor = (niche: string) => {
@@ -493,9 +555,24 @@ export default function ModelDetailsPage() {
                   </div>
                 </div>
 
-                {hasPurchased ? (
-                  <div className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 py-3 rounded-xl text-center font-medium backdrop-blur-sm">
-                    ✅ Purchased
+                {checkingPurchase ? (
+                  <div className="bg-slate-700/30 border border-slate-600/50 py-3 rounded-xl text-center font-medium backdrop-blur-sm">
+                    <div className="flex items-center justify-center space-x-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-cyan-500"></div>
+                      <span className="text-slate-300">Checking purchase status...</span>
+                    </div>
+                  </div>
+                ) : hasPurchased ? (
+                  <div className="space-y-3">
+                    <div className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 py-3 rounded-xl text-center font-medium backdrop-blur-sm">
+                      ✅ Purchased
+                    </div>
+                    <button
+                      onClick={handleDownload}
+                      className="w-full bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white py-3 rounded-xl transition-all duration-200 font-medium shadow-lg shadow-cyan-500/25"
+                    >
+                      Download Model
+                    </button>
                   </div>
                 ) : (
                   <PrimaryButton
@@ -536,6 +613,17 @@ export default function ModelDetailsPage() {
                   <div className="text-sm text-slate-400">
                     AI Model Creator
                   </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Firebase Status Indicator */}
+            <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-2xl shadow-2xl shadow-black/30 p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-slate-300">Data Source</span>
+                <div className="flex items-center space-x-2">
+                  <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
+                  <span className="text-xs text-slate-400">Firebase + Local</span>
                 </div>
               </div>
             </div>

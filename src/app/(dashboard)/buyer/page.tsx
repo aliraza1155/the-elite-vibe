@@ -1,4 +1,3 @@
-// app/dashboard/buyer/page.tsx - UPDATED VERSION
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -17,6 +16,7 @@ interface Purchase {
   price: number;
   purchasedAt: string;
   downloadUrl?: string;
+  firestoreId?: string;
 }
 
 interface AIModel {
@@ -51,6 +51,7 @@ export default function BuyerDashboard() {
   const [totalSpent, setTotalSpent] = useState(0);
   const [recentPurchases, setRecentPurchases] = useState<Purchase[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -69,8 +70,13 @@ export default function BuyerDashboard() {
 
   const loadPurchaseData = async (userId: string) => {
     try {
-      // Use await with the async PaymentManager method
+      setLoading(true);
+      console.log('🔄 Loading purchase data with Firebase integration...');
+
+      // Load purchases from Firebase with fallback to localStorage
       const userPurchases = await PaymentManager.getUserPurchases(userId);
+      console.log('✅ Loaded purchases:', userPurchases.length);
+      
       setPurchases(userPurchases);
 
       const total = userPurchases.reduce((sum: number, purchase: Purchase) => sum + purchase.price, 0);
@@ -79,6 +85,7 @@ export default function BuyerDashboard() {
       const recent = userPurchases.slice(-3).reverse();
       setRecentPurchases(recent);
 
+      // Load purchased models data
       const allModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
       const purchasedModelsData = userPurchases.map((purchase: Purchase) => 
         allModels.find((model: AIModel) => model.id === purchase.modelId)
@@ -86,6 +93,7 @@ export default function BuyerDashboard() {
       
       setPurchasedModels(purchasedModelsData);
       
+      // Update current user data
       const users = JSON.parse(localStorage.getItem('users') || '[]');
       const updatedUser = users.find((u: any) => u.id === userId);
       if (updatedUser) {
@@ -94,11 +102,19 @@ export default function BuyerDashboard() {
       }
       
     } catch (error) {
-      console.error('Error loading purchase data:', error);
+      console.error('❌ Error loading purchase data:', error);
       setPurchases([]);
       setPurchasedModels([]);
     } finally {
       setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  const refreshData = async () => {
+    if (currentUser) {
+      setRefreshing(true);
+      await loadPurchaseData(currentUser.id);
     }
   };
 
@@ -111,9 +127,34 @@ export default function BuyerDashboard() {
     return uniqueModelIds.size;
   };
 
-  const handleDownload = (modelId: string, modelName: string) => {
-    alert(`Downloading ${modelName}...`);
-    console.log(`Download requested for model: ${modelId}`);
+  const handleDownload = async (modelId: string, modelName: string) => {
+    try {
+      // Check if user actually purchased this model using Firebase
+      if (currentUser) {
+        const hasPurchased = await PaymentManager.hasUserPurchasedModel(currentUser.id, modelId);
+        if (!hasPurchased) {
+          alert('❌ You have not purchased this model. Please complete your purchase first.');
+          return;
+        }
+      }
+
+      alert(`📥 Downloading ${modelName}...`);
+      console.log(`Download requested for model: ${modelId}`);
+      
+      // Here you would typically:
+      // 1. Generate a secure download link
+      // 2. Track the download in Firebase
+      // 3. Provide the actual download
+      
+      // Simulate download process
+      setTimeout(() => {
+        alert(`✅ ${modelName} downloaded successfully!`);
+      }, 1000);
+      
+    } catch (error) {
+      console.error('Download error:', error);
+      alert('❌ Download failed. Please try again.');
+    }
   };
 
   const formatCurrency = (amount: number) => {
@@ -123,11 +164,18 @@ export default function BuyerDashboard() {
     }).format(amount);
   };
 
-  const refreshData = () => {
-    if (currentUser) {
-      setLoading(true);
-      loadPurchaseData(currentUser.id);
+  const getSubscriptionStatus = () => {
+    if (!currentUser?.subscription) {
+      return { status: 'Free', isActive: false };
     }
+    
+    const isActive = currentUser.subscription.status === 'active';
+    const planType = currentUser.subscription.planId?.includes('premium') ? 'Premium' : 'Basic';
+    
+    return { 
+      status: isActive ? planType : 'Free', 
+      isActive 
+    };
   };
 
   if (!isClient || !currentUser) {
@@ -141,16 +189,7 @@ export default function BuyerDashboard() {
     );
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500 mx-auto"></div>
-          <p className="mt-4 text-slate-300">Loading your purchases...</p>
-        </div>
-      </div>
-    );
-  }
+  const subscription = getSubscriptionStatus();
 
   return (
     <AuthGuard requireAuth>
@@ -161,23 +200,31 @@ export default function BuyerDashboard() {
         </div>
 
         <div className="relative z-10 py-8 px-4 sm:px-6 lg:px-8 space-y-8">
-          {/* Header Section */}
+          {/* Refresh Data Button */}
+          <div className="flex justify-end">
+            <button
+              onClick={refreshData}
+              disabled={refreshing}
+              className="bg-gradient-to-r from-cyan-500 to-blue-500 text-white px-4 py-2 rounded-xl hover:from-cyan-600 hover:to-blue-600 transition-all duration-200 font-medium shadow-lg shadow-cyan-500/25 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {refreshing ? (
+                <span className="flex items-center">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  Refreshing...
+                </span>
+              ) : (
+                '🔄 Refresh Data'
+              )}
+            </button>
+          </div>
+
           <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between">
               <div className="flex-1">
-                <div className="flex items-center gap-4 mb-4">
-                  <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent">
-                    Explorer Dashboard
-                  </h1>
-                  <button
-                    onClick={refreshData}
-                    className="text-cyan-400 hover:text-cyan-300 transition-colors duration-200"
-                    title="Refresh data"
-                  >
-                    🔄
-                  </button>
-                </div>
-                <p className="text-slate-300">
+                <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent">
+                  Explorer Dashboard
+                </h1>
+                <p className="mt-2 text-slate-300">
                   Welcome back, {currentUser.displayName}! Manage your purchases and subscriptions.
                   {currentUser.role === 'both' && (
                     <span className="text-cyan-400 font-medium">
@@ -223,7 +270,6 @@ export default function BuyerDashboard() {
             </div>
           </div>
 
-          {/* Stats Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6">
             {[
               { 
@@ -252,9 +298,9 @@ export default function BuyerDashboard() {
               },
               { 
                 name: 'Active Plan', 
-                value: currentUser.subscription?.status === 'active' ? 'Premium' : 'Free', 
-                change: currentUser.subscription?.status === 'active' ? 'Active' : 'Free', 
-                changeType: currentUser.subscription?.status === 'active' ? 'positive' : 'neutral',
+                value: subscription.status, 
+                change: subscription.isActive ? 'Active' : 'Free Tier', 
+                changeType: subscription.isActive ? 'positive' : 'neutral',
                 icon: '📋',
                 gradient: 'from-amber-500 to-orange-500'
               },
@@ -282,7 +328,6 @@ export default function BuyerDashboard() {
             ))}
           </div>
 
-          {/* Main Content Grid */}
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
             {recentPurchases.length > 0 && (
               <div className="xl:col-span-2 bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
@@ -291,7 +336,7 @@ export default function BuyerDashboard() {
                     Recent Purchases
                   </h2>
                   <Link href="/my-purchases" className="text-cyan-400 hover:text-cyan-300 text-sm font-medium transition-colors duration-200">
-                    View All
+                    View All {purchases.length}
                   </Link>
                 </div>
                 <div className="space-y-4">
@@ -313,6 +358,11 @@ export default function BuyerDashboard() {
                             <div className="text-sm text-slate-400">
                               Purchased {new Date(purchase.purchasedAt).toLocaleDateString()}
                             </div>
+                            {purchase.firestoreId && (
+                              <div className="text-xs text-slate-500 mt-1">
+                                Firebase ID: {purchase.firestoreId.substring(0, 8)}...
+                              </div>
+                            )}
                           </div>
                         </div>
                         <div className="text-right flex-shrink-0">
@@ -321,7 +371,7 @@ export default function BuyerDashboard() {
                           </div>
                           <button
                             onClick={() => handleDownload(purchase.modelId, purchase.modelName)}
-                            className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors duration-200"
+                            className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors duration-200 mt-1"
                           >
                             Download
                           </button>
@@ -333,7 +383,6 @@ export default function BuyerDashboard() {
               </div>
             )}
 
-            {/* Quick Actions */}
             <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
               <h2 className="text-xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent mb-6">
                 Quick Actions
@@ -380,11 +429,28 @@ export default function BuyerDashboard() {
                   </div>
                 </Link>
               </div>
+
+              {/* Firebase Status Indicator */}
+              <div className="mt-6 p-3 bg-slate-700/40 rounded-xl border border-slate-600/50">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-slate-300">Data Source</span>
+                  <div className="flex items-center space-x-2">
+                    <div className={`w-2 h-2 rounded-full ${purchases.some(p => p.firestoreId) ? 'bg-emerald-500' : 'bg-amber-500'}`}></div>
+                    <span className="text-xs text-slate-400">
+                      {purchases.some(p => p.firestoreId) ? 'Firebase + Local' : 'Local Storage'}
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Empty State */}
-          {purchases.length === 0 && (
+          {loading ? (
+            <div className="text-center py-12">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-500 mx-auto"></div>
+              <p className="mt-4 text-slate-400">Loading your purchase data...</p>
+            </div>
+          ) : purchases.length === 0 ? (
             <div className="bg-gradient-to-r from-slate-800/60 to-cyan-900/20 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
               <h2 className="text-xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent mb-6">
                 Begin Your AI Journey
@@ -426,10 +492,7 @@ export default function BuyerDashboard() {
                 </Link>
               </div>
             </div>
-          )}
-
-          {/* Purchased Models Collection */}
-          {purchases.length > 0 && (
+          ) : (
             <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/30 p-6">
               <h2 className="text-xl font-bold bg-gradient-to-r from-white to-cyan-100 bg-clip-text text-transparent mb-6">
                 Your Collection

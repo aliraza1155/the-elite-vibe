@@ -1,4 +1,3 @@
-// app/payment/success/page.tsx - UPDATED VERSION
 'use client';
 
 import { useEffect, useState, Suspense } from 'react';
@@ -8,10 +7,6 @@ import { PrimaryButton } from '@/components/ui';
 import Link from 'next/link';
 import { PaymentManager } from '@/lib/payment-utils';
 import { SubscriptionManager } from '@/lib/subscription-utils';
-import { FirebaseDatabase } from '@/lib/firebase-database';
-
-// Import the Subscription type to ensure type safety
-import type { Subscription } from '@/lib/subscription-utils';
 
 // Main content component that uses useSearchParams
 function PaymentSuccessContent() {
@@ -19,6 +14,7 @@ function PaymentSuccessContent() {
   const [purchaseDetails, setPurchaseDetails] = useState<any>(null);
   const [subscription, setSubscription] = useState<any>(null);
   const [error, setError] = useState<string>('');
+  const [firebaseStatus, setFirebaseStatus] = useState<'pending' | 'completed' | 'failed'>('pending');
   const router = useRouter();
   const searchParams = useSearchParams();
   const sessionId = searchParams.get('session_id');
@@ -40,10 +36,15 @@ function PaymentSuccessContent() {
 
   const verifyModelPurchase = async (sessionId: string) => {
     try {
+      console.log('🔄 Verifying model purchase with session:', sessionId);
+      setFirebaseStatus('pending');
+
       const result = await PaymentManager.verifyStripePayment(sessionId);
       
       if (result.success && result.isPaid && result.modelId && result.buyerId && result.amount) {
-        // Complete the purchase using the updated PaymentManager
+        console.log('✅ Payment verified, completing purchase in Firebase...');
+        
+        // Complete the purchase with Firebase integration
         const purchaseResult = await PaymentManager.completePurchaseAfterStripePayment(
           sessionId,
           result.modelId,
@@ -52,17 +53,24 @@ function PaymentSuccessContent() {
         );
 
         if (purchaseResult.success) {
+          setFirebaseStatus('completed');
           setStatus('success');
           setPurchaseDetails(purchaseResult.transaction);
+          console.log('🎉 Purchase completed successfully with Firebase');
         } else {
+          setFirebaseStatus('failed');
           setStatus('error');
           setError(purchaseResult.error || 'Failed to complete purchase');
+          console.error('❌ Purchase completion failed:', purchaseResult.error);
         }
       } else {
+        setFirebaseStatus('failed');
         setStatus('error');
         setError('Payment verification failed');
+        console.error('❌ Payment verification failed:', result);
       }
     } catch (err: any) {
+      setFirebaseStatus('failed');
       console.error('Model purchase verification error:', err);
       setStatus('error');
       setError(err.message || 'Failed to verify payment');
@@ -71,6 +79,9 @@ function PaymentSuccessContent() {
 
   const verifySubscription = async (sessionId: string) => {
     try {
+      console.log('🔄 Verifying subscription with session:', sessionId);
+      setFirebaseStatus('pending');
+
       // Call backend to verify Stripe session
       const response = await fetch(`/api/checkout/session?session_id=${sessionId}`);
       const result = await response.json();
@@ -82,13 +93,17 @@ function PaymentSuccessContent() {
       const { session } = result;
       
       if (session.payment_status === 'paid') {
+        console.log('✅ Subscription payment verified, updating in Firebase...');
         await updateUserSubscription(session);
+        setFirebaseStatus('completed');
         setStatus('success');
         setSubscription(session);
+        console.log('🎉 Subscription updated successfully in Firebase');
       } else {
         throw new Error('Payment was not completed successfully');
       }
     } catch (err: any) {
+      setFirebaseStatus('failed');
       console.error('Subscription verification error:', err);
       setStatus('error');
       setError(err.message || 'Failed to verify payment');
@@ -113,14 +128,14 @@ function PaymentSuccessContent() {
         throw new Error('No plan information found in session');
       }
 
-      // Create subscription record in Firebase with proper typing
-      const subscriptionData: Omit<Subscription, 'id'> = {
+      // Create subscription record for Firebase
+      const subscriptionData = {
         stripeSubscriptionId: session.subscription?.id || session.id,
         stripeCustomerId: session.customer,
         planId: planId,
-        type: planType as 'seller' | 'buyer', // Ensure proper type casting
+        type: planType,
         amount: amount,
-        status: 'active' as const, // Use const assertion to ensure type safety
+        status: 'active',
         purchasedAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
         paymentMethod: 'card',
@@ -129,22 +144,33 @@ function PaymentSuccessContent() {
         nextBillingDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
       };
 
-      // Create subscription in Firebase
-      const subscriptionId = await SubscriptionManager.createUserSubscription(currentUser.id, subscriptionData);
+      // Update subscription in Firebase
+      console.log('🔥 Saving subscription to Firebase...');
+      const firebaseResult = await PaymentManager.updateUserSubscription(
+        currentUser.id,
+        subscriptionData
+      );
 
-      // Update current user in localStorage for backward compatibility
+      if (!firebaseResult.success) {
+        throw new Error(firebaseResult.error || 'Failed to save subscription to Firebase');
+      }
+
+      console.log('✅ Subscription saved to Firebase:', firebaseResult.subscription?.firestoreId);
+
+      // Update current user in localStorage for immediate UI update
       const updatedUser = {
         ...currentUser,
         subscription: {
           ...subscriptionData,
-          id: subscriptionId
+          id: firebaseResult.subscription?.id || `sub_${Date.now()}`,
+          firestoreId: firebaseResult.subscription?.firestoreId
         },
         role: planType === 'seller' ? (currentUser.role === 'both' ? 'both' : 'seller') : currentUser.role,
         stripeCustomerId: session.customer,
         updatedAt: new Date().toISOString()
       };
 
-      // Save updated user to localStorage
+      // Save updated user to localStorage for immediate access
       localStorage.setItem('currentUser', JSON.stringify(updatedUser));
 
       // Update users array in localStorage for backward compatibility
@@ -172,6 +198,13 @@ function PaymentSuccessContent() {
     ).join(' ');
   };
 
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    }).format(amount);
+  };
+
   if (status === 'loading') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
@@ -188,9 +221,26 @@ function PaymentSuccessContent() {
             <h2 className="text-xl font-semibold text-white mb-2">
               Verifying Your Payment
             </h2>
-            <p className="text-slate-400">
+            <p className="text-slate-400 mb-4">
               Please wait while we confirm your payment details...
             </p>
+            
+            {/* Firebase Status Indicator */}
+            <div className="mt-6 p-4 bg-slate-700/30 rounded-xl border border-slate-600/50">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-slate-300">Database Sync</span>
+                <div className="flex items-center space-x-2">
+                  <div className={`w-2 h-2 rounded-full ${
+                    firebaseStatus === 'completed' ? 'bg-emerald-500' : 
+                    firebaseStatus === 'failed' ? 'bg-rose-500' : 'bg-amber-500'
+                  }`}></div>
+                  <span className="text-xs text-slate-400">
+                    {firebaseStatus === 'completed' ? 'Firebase Synced' :
+                     firebaseStatus === 'failed' ? 'Sync Failed' : 'Syncing...'}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
         <Footer />
@@ -223,6 +273,16 @@ function PaymentSuccessContent() {
             <p className="text-xl text-slate-300 mb-6">
               {error}
             </p>
+
+            {/* Firebase Status for Error */}
+            {firebaseStatus === 'failed' && (
+              <div className="mb-6 p-4 bg-amber-500/20 border border-amber-500/30 rounded-xl">
+                <p className="text-amber-300 text-sm">
+                  Note: Your payment was processed but we encountered issues saving to our database. 
+                  Please contact support if you don't see your purchase in your account.
+                </p>
+              </div>
+            )}
 
             <div className="space-y-4">
               {type === 'model' ? (
@@ -278,6 +338,16 @@ function PaymentSuccessContent() {
             Payment Successful! 🎉
           </h1>
           
+          {/* Firebase Success Indicator */}
+          <div className="mb-6 p-4 bg-emerald-500/20 border border-emerald-500/30 rounded-xl">
+            <div className="flex items-center justify-center space-x-2">
+              <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
+              <span className="text-emerald-300 text-sm">
+                ✅ Successfully saved to secure database
+              </span>
+            </div>
+          </div>
+          
           {type === 'model' && purchaseDetails ? (
             <>
               <p className="text-xl text-slate-300 mb-6">
@@ -299,13 +369,13 @@ function PaymentSuccessContent() {
                   <div className="flex justify-between">
                     <span className="text-slate-400">Amount Paid:</span>
                     <span className="font-medium text-emerald-400">
-                      ${purchaseDetails.price}
+                      {formatCurrency(purchaseDetails.price)}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-400">Seller Earnings:</span>
                     <span className="font-medium text-emerald-300">
-                      ${purchaseDetails.sellerRevenue}
+                      {formatCurrency(purchaseDetails.sellerRevenue)}
                     </span>
                   </div>
                   <div className="flex justify-between">
@@ -320,6 +390,14 @@ function PaymentSuccessContent() {
                       {new Date(purchaseDetails.purchasedAt).toLocaleDateString()}
                     </span>
                   </div>
+                  {purchaseDetails.firestoreId && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Transaction ID:</span>
+                      <span className="text-xs text-slate-400 font-mono">
+                        {purchaseDetails.firestoreId.substring(0, 12)}...
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -360,7 +438,7 @@ function PaymentSuccessContent() {
                     <div className="flex justify-between">
                       <span className="text-slate-400">Amount:</span>
                       <span className="font-medium text-emerald-400">
-                        ${subscription.amount_total ? (subscription.amount_total / 100).toFixed(2) : '0.00'}
+                        {formatCurrency(subscription.amount_total ? subscription.amount_total / 100 : 0)}
                       </span>
                     </div>
                     <div className="flex justify-between">
@@ -370,7 +448,13 @@ function PaymentSuccessContent() {
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-400">Expires:</span>
+                      <span className="text-slate-400">Billing Cycle:</span>
+                      <span className="font-medium text-white">
+                        Monthly
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Next Billing:</span>
                       <span className="font-medium text-white">
                         {new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString()}
                       </span>
@@ -411,7 +495,10 @@ function PaymentSuccessContent() {
             </p>
             <p className="text-xs text-slate-500 mt-2">
               Need help? Contact our{' '}
-              <button className="text-cyan-400 hover:text-cyan-300 transition-colors duration-200">
+              <button 
+                onClick={() => alert('Support: support@aimarketplace.com')}
+                className="text-cyan-400 hover:text-cyan-300 transition-colors duration-200"
+              >
                 support team
               </button>
             </p>

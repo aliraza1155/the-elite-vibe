@@ -1,4 +1,3 @@
-// lib/firebase.ts - UPDATED VERSION
 import { initializeApp, FirebaseApp } from 'firebase/app';
 import { 
   getFirestore, 
@@ -67,32 +66,26 @@ const isClient = typeof window !== 'undefined';
 if (isClient) {
   try {
     console.log('🚀 Initializing Firebase...');
+    app = initializeApp(firebaseConfig);
+    console.log('✅ Firebase app initialized');
     
-    // Check if Firebase config is available
-    if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
-      console.warn('⚠️ Firebase configuration is incomplete. Some features may not work.');
-    } else {
-      app = initializeApp(firebaseConfig);
-      console.log('✅ Firebase app initialized');
-      
-      db = getFirestore(app);
-      console.log('✅ Firestore initialized');
-      
-      storage = getStorage(app);
-      console.log('✅ Firebase Storage initialized');
-      console.log('📦 Storage bucket:', storage.app.options.storageBucket);
-      
-      auth = getAuth(app);
-      console.log('✅ Firebase Auth initialized');
-      
-      // Initialize analytics only in production and on client side
-      if (process.env.NODE_ENV === 'production') {
-        analytics = getAnalytics(app);
-        console.log('✅ Firebase Analytics initialized');
-      }
-      
-      console.log('🎉 Firebase initialization completed successfully');
+    db = getFirestore(app);
+    console.log('✅ Firestore initialized');
+    
+    storage = getStorage(app);
+    console.log('✅ Firebase Storage initialized');
+    console.log('📦 Storage bucket:', storage.app.options.storageBucket);
+    
+    auth = getAuth(app);
+    console.log('✅ Firebase Auth initialized');
+    
+    // Initialize analytics only in production and on client side
+    if (process.env.NODE_ENV === 'production') {
+      analytics = getAnalytics(app);
+      console.log('✅ Firebase Analytics initialized');
     }
+    
+    console.log('🎉 Firebase initialization completed successfully');
   } catch (error) {
     console.error('❌ Firebase initialization error:', error);
   }
@@ -100,35 +93,6 @@ if (isClient) {
 
 // Export the Firebase instances
 export { db, storage, auth, analytics };
-
-// Helper functions to safely get Firebase instances
-export const getFirestoreInstance = (): Firestore => {
-  if (!db) {
-    throw new Error('Firestore is not initialized. Make sure Firebase is properly configured.');
-  }
-  return db;
-};
-
-export const getStorageInstance = (): FirebaseStorage => {
-  if (!storage) {
-    throw new Error('Firebase Storage is not initialized. Make sure Firebase is properly configured.');
-  }
-  
-  // Check if storage bucket is configured
-  if (!storage.app.options.storageBucket) {
-    throw new Error('Firebase Storage bucket is not configured. Check your Firebase config.');
-  }
-  
-  console.log('✅ Storage instance verified, bucket:', storage.app.options.storageBucket);
-  return storage;
-};
-
-export const getAuthInstance = (): Auth => {
-  if (!auth) {
-    throw new Error('Firebase Auth is not initialized. Make sure Firebase is properly configured.');
-  }
-  return auth;
-};
 
 // Type definitions for our services
 interface FirestoreDocument {
@@ -168,6 +132,25 @@ interface UploadTaskWithProgress {
   lastTime: number;
 }
 
+// Helper function to ensure storage is initialized
+const getStorageInstance = (): FirebaseStorage => {
+  if (!storage) {
+    const errorMsg = 'Firebase Storage is not initialized. Make sure you are in a browser environment and Firebase config is correct.';
+    console.error('❌', errorMsg);
+    throw new Error(errorMsg);
+  }
+  
+  // Check if storage bucket is configured
+  if (!storage.app.options.storageBucket) {
+    const errorMsg = 'Firebase Storage bucket is not configured. Check your Firebase config.';
+    console.error('❌', errorMsg);
+    throw new Error(errorMsg);
+  }
+  
+  console.log('✅ Storage instance verified, bucket:', storage.app.options.storageBucket);
+  return storage;
+};
+
 // Helper function to validate file before upload
 const validateFile = (file: File): void => {
   if (!file) {
@@ -190,13 +173,15 @@ const validateFile = (file: File): void => {
   console.log(`✅ File validated: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB, ${file.type})`);
 };
 
-// Firestore Services with proper error handling and null checks
+// Firestore Services with proper error handling
 export const firestore = {
   create: async (collectionName: string, data: any): Promise<DocumentReference<DocumentData>> => {
-    const dbInstance = getFirestoreInstance();
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
     
     try {
-      return await addDoc(collection(dbInstance, collectionName), {
+      return await addDoc(collection(db, collectionName), {
         ...data,
         createdAt: new Date(),
         updatedAt: new Date()
@@ -208,10 +193,12 @@ export const firestore = {
   },
 
   get: async (collectionName: string, id: string): Promise<FirestoreDocument | null> => {
-    const dbInstance = getFirestoreInstance();
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
     
     try {
-      const docRef = doc(dbInstance, collectionName, id);
+      const docRef = doc(db, collectionName, id);
       const docSnap = await getDoc(docRef);
       return docSnap.exists() ? { id: docSnap.id, ...docSnap.data() } : null;
     } catch (error) {
@@ -221,10 +208,12 @@ export const firestore = {
   },
 
   update: async (collectionName: string, id: string, data: any): Promise<void> => {
-    const dbInstance = getFirestoreInstance();
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
     
     try {
-      const docRef = doc(dbInstance, collectionName, id);
+      const docRef = doc(db, collectionName, id);
       return await updateDoc(docRef, {
         ...data,
         updatedAt: new Date()
@@ -236,10 +225,12 @@ export const firestore = {
   },
 
   delete: async (collectionName: string, id: string): Promise<void> => {
-    const dbInstance = getFirestoreInstance();
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
     
     try {
-      return await deleteDoc(doc(dbInstance, collectionName, id));
+      return await deleteDoc(doc(db, collectionName, id));
     } catch (error) {
       console.error('Firestore delete error:', error);
       throw new Error(`Failed to delete document ${id} from ${collectionName}`);
@@ -247,15 +238,215 @@ export const firestore = {
   },
 
   query: async (collectionName: string, constraints: QueryConstraint[] = []): Promise<FirestoreDocument[]> => {
-    const dbInstance = getFirestoreInstance();
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
     
     try {
-      const q = query(collection(dbInstance, collectionName), ...constraints);
+      const q = query(collection(db, collectionName), ...constraints);
       const querySnapshot = await getDocs(q);
       return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     } catch (error) {
       console.error('Firestore query error:', error);
       throw new Error(`Failed to query collection ${collectionName}`);
+    }
+  }
+};
+
+// Payment and Subscription Services
+export const paymentService = {
+  // Create a new transaction
+  createTransaction: async (transactionData: any): Promise<string> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      const docRef = await firestore.create('transactions', {
+        ...transactionData,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+      console.log('✅ Transaction created in Firestore:', docRef.id);
+      return docRef.id;
+    } catch (error) {
+      console.error('❌ Error creating transaction:', error);
+      throw new Error('Failed to create transaction');
+    }
+  },
+
+  // Get user transactions
+  getUserTransactions: async (userId: string): Promise<any[]> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      const transactions = await firestore.query('transactions', [
+        where('buyerId', '==', userId)
+      ]);
+      return transactions;
+    } catch (error) {
+      console.error('❌ Error getting user transactions:', error);
+      return [];
+    }
+  },
+
+  // Get seller transactions
+  getSellerTransactions: async (sellerId: string): Promise<any[]> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      const transactions = await firestore.query('transactions', [
+        where('sellerId', '==', sellerId)
+      ]);
+      return transactions;
+    } catch (error) {
+      console.error('❌ Error getting seller transactions:', error);
+      return [];
+    }
+  },
+
+  // Update transaction status
+  updateTransactionStatus: async (transactionId: string, status: string): Promise<boolean> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      await firestore.update('transactions', transactionId, {
+        status,
+        updatedAt: new Date().toISOString()
+      });
+      console.log('✅ Transaction status updated:', transactionId);
+      return true;
+    } catch (error) {
+      console.error('❌ Error updating transaction status:', error);
+      return false;
+    }
+  }
+};
+
+export const subscriptionService = {
+  // Create or update subscription
+  createSubscription: async (subscriptionData: any): Promise<string> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      const docRef = await firestore.create('subscriptions', {
+        ...subscriptionData,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+      console.log('✅ Subscription created in Firestore:', docRef.id);
+      return docRef.id;
+    } catch (error) {
+      console.error('❌ Error creating subscription:', error);
+      throw new Error('Failed to create subscription');
+    }
+  },
+
+  // Get user subscription
+  getUserSubscription: async (userId: string): Promise<any> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      const subscriptions = await firestore.query('subscriptions', [
+        where('userId', '==', userId),
+        where('status', '==', 'active')
+      ]);
+      return subscriptions.length > 0 ? subscriptions[0] : null;
+    } catch (error) {
+      console.error('❌ Error getting user subscription:', error);
+      return null;
+    }
+  },
+
+  // Update subscription
+  updateSubscription: async (subscriptionId: string, updates: any): Promise<boolean> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      await firestore.update('subscriptions', subscriptionId, {
+        ...updates,
+        updatedAt: new Date().toISOString()
+      });
+      console.log('✅ Subscription updated:', subscriptionId);
+      return true;
+    } catch (error) {
+      console.error('❌ Error updating subscription:', error);
+      return false;
+    }
+  },
+
+  // Cancel subscription
+  cancelSubscription: async (subscriptionId: string): Promise<boolean> => {
+    return await subscriptionService.updateSubscription(subscriptionId, {
+      status: 'canceled',
+      canceledAt: new Date().toISOString()
+    });
+  }
+};
+
+export const userPaymentService = {
+  // Update user earnings
+  updateUserEarnings: async (userId: string, earningsData: any): Promise<boolean> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      await firestore.update('users', userId, {
+        earnings: earningsData,
+        updatedAt: new Date().toISOString()
+      });
+      console.log('✅ User earnings updated:', userId);
+      return true;
+    } catch (error) {
+      console.error('❌ Error updating user earnings:', error);
+      return false;
+    }
+  },
+
+  // Update user stats
+  updateUserStats: async (userId: string, statsData: any): Promise<boolean> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      await firestore.update('users', userId, {
+        stats: statsData,
+        updatedAt: new Date().toISOString()
+      });
+      console.log('✅ User stats updated:', userId);
+      return true;
+    } catch (error) {
+      console.error('❌ Error updating user stats:', error);
+      return false;
+    }
+  },
+
+  // Get user payment data
+  getUserPaymentData: async (userId: string): Promise<any> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
+    try {
+      const user = await firestore.get('users', userId);
+      return user;
+    } catch (error) {
+      console.error('❌ Error getting user payment data:', error);
+      return null;
     }
   }
 };
@@ -693,26 +884,34 @@ export const storageService = {
 export const authService = {
   // Get current authenticated user
   getCurrentUser: (): User | null => {
-    const authInstance = getAuthInstance();
-    return authInstance.currentUser;
+    if (!auth) {
+      throw new Error('Firebase Auth is not initialized');
+    }
+    return auth.currentUser;
   },
 
   // Email/Password Login
   login: (email: string, password: string) => {
-    const authInstance = getAuthInstance();
-    return signInWithEmailAndPassword(authInstance, email, password);
+    if (!auth) {
+      throw new Error('Firebase Auth is not initialized');
+    }
+    return signInWithEmailAndPassword(auth, email, password);
   },
   
   // Email/Password Registration
   register: (email: string, password: string) => {
-    const authInstance = getAuthInstance();
-    return createUserWithEmailAndPassword(authInstance, email, password);
+    if (!auth) {
+      throw new Error('Firebase Auth is not initialized');
+    }
+    return createUserWithEmailAndPassword(auth, email, password);
   },
   
   // Logout
   logout: () => {
-    const authInstance = getAuthInstance();
-    return signOut(authInstance);
+    if (!auth) {
+      throw new Error('Firebase Auth is not initialized');
+    }
+    return signOut(auth);
   },
   
   // Update User Profile
@@ -722,38 +921,43 @@ export const authService = {
   
   // Send Email Verification
   sendEmailVerification: (user: FirebaseUser) => {
-    const authInstance = getAuthInstance();
+    if (!auth) {
+      throw new Error('Firebase Auth is not initialized');
+    }
     return sendEmailVerification(user);
   },
   
   // Send Password Reset Email
   sendPasswordResetEmail: (email: string) => {
-    const authInstance = getAuthInstance();
-    return sendPasswordResetEmail(authInstance, email);
+    if (!auth) {
+      throw new Error('Firebase Auth is not initialized');
+    }
+    return sendPasswordResetEmail(auth, email);
   },
   
   // Auth State Listener
   onAuthStateChanged: (callback: (user: User | null) => void) => {
-    const authInstance = getAuthInstance();
-    return onAuthStateChanged(authInstance, callback);
+    if (!auth) {
+      console.warn('Firebase Auth is not initialized');
+      return () => {};
+    }
+    return onAuthStateChanged(auth, callback);
   },
 
   // Check if user email is verified
   isEmailVerified: (): boolean => {
-    const authInstance = getAuthInstance();
-    if (!authInstance.currentUser) {
+    if (!auth || !auth.currentUser) {
       return false;
     }
-    return authInstance.currentUser.emailVerified;
+    return auth.currentUser.emailVerified;
   },
 
   // Reload user data (useful for checking email verification status)
   reloadUser: async (): Promise<void> => {
-    const authInstance = getAuthInstance();
-    if (!authInstance.currentUser) {
+    if (!auth || !auth.currentUser) {
       throw new Error('No authenticated user');
     }
-    return await authInstance.currentUser.reload();
+    return await auth.currentUser.reload();
   }
 };
 
@@ -761,6 +965,10 @@ export const authService = {
 export const userService = {
   // Create new user in Firestore
   createUser: async (userData: any): Promise<void> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
     try {
       await firestore.create('users', userData);
       console.log('✅ User created in Firestore:', userData.email);
@@ -772,6 +980,10 @@ export const userService = {
 
   // Find user by email
   findUserByEmail: async (email: string): Promise<any> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
     try {
       const users = await firestore.query('users', [
         where('email', '==', email)
@@ -785,6 +997,10 @@ export const userService = {
 
   // Find user by username
   findUserByUsername: async (username: string): Promise<any> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
     try {
       const users = await firestore.query('users', [
         where('username', '==', username)
@@ -820,6 +1036,10 @@ export const userService = {
 
   // Update user profile
   updateUserProfile: async (userId: string, updates: any): Promise<boolean> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
     try {
       await firestore.update('users', userId, {
         ...updates,
@@ -835,6 +1055,10 @@ export const userService = {
 
   // Get user by ID
   getUserById: async (userId: string): Promise<any> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
     try {
       return await firestore.get('users', userId);
     } catch (error) {
@@ -884,6 +1108,10 @@ export const userService = {
 
   // Get all users (for admin purposes)
   getAllUsers: async (): Promise<any[]> => {
+    if (!db) {
+      throw new Error('Firestore is not initialized');
+    }
+    
     try {
       return await firestore.query('users');
     } catch (error) {

@@ -1,4 +1,4 @@
-// app/dashboard/seller/page.tsx
+// app/seller/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -113,11 +113,14 @@ export default function SellerDashboard() {
 
   const checkSubscriptionStatus = async (user: any) => {
     try {
-      const subscriptionCheck = await SubscriptionManager.canUserListModels(user);
-      const hasActiveSub = await SubscriptionManager.hasActiveSubscription(user);
+      const subscriptionCheck = SubscriptionManager.canUserListModels(user);
+      
+      // Check Firebase for subscription status
+      const firebaseSubscription = await PaymentManager.getUserSubscription(user.id);
+      const hasActiveFirebaseSub = firebaseSubscription && firebaseSubscription.status === 'active';
       
       setSubscriptionStatus({
-        hasActiveSubscription: hasActiveSub,
+        hasActiveSubscription: hasActiveFirebaseSub || SubscriptionManager.hasActiveSubscription(user),
         subscriptionTier: subscriptionCheck.subscriptionTier || 'Free',
         canListModels: subscriptionCheck.canList,
         maxModels: subscriptionCheck.maxModels || 0,
@@ -139,7 +142,7 @@ export default function SellerDashboard() {
 
   const loadSellerData = async (userId: string) => {
     try {
-      console.log('🔄 Loading seller data with unified ID system...');
+      console.log('🔄 Loading seller data with Firebase integration...');
       
       // Load user models using unified system
       const userModels = await unifiedFirestore.getUserModels(userId);
@@ -147,7 +150,7 @@ export default function SellerDashboard() {
       console.log('✅ Loaded user models:', userModels.length);
       
       const formattedModels: AIModel[] = userModels.map((model: any) => ({
-        id: model.id, // This is the unified ID
+        id: model.id,
         name: model.name || '',
         niche: model.niche || '',
         description: model.description || '',
@@ -172,7 +175,7 @@ export default function SellerDashboard() {
       
       setUserModels(formattedModels);
 
-      // Load earnings data using updated PaymentManager
+      // Load earnings data from Firebase
       const earnings = await PaymentManager.getSellerEarnings(userId);
       setEarnings({
         total: earnings.totalRevenue,
@@ -181,9 +184,9 @@ export default function SellerDashboard() {
         paidOut: earnings.totalPayouts
       });
 
-      // Load sales data
-      const salesData = earnings.transactions.map(transaction => ({
-        id: transaction.id,
+      // Load sales data from Firebase
+      const salesData = earnings.transactions.map((transaction: any) => ({
+        id: transaction.id || transaction.firestoreId,
         modelId: transaction.modelId,
         modelName: transaction.modelName,
         buyerId: transaction.buyerId,
@@ -259,7 +262,7 @@ export default function SellerDashboard() {
       return;
     }
 
-    console.log('🔄 Starting SOLID model approval with unified ID:', modelId);
+    console.log('🔄 Starting model approval with Firebase integration:', modelId);
     setApprovingModelId(modelId);
 
     try {
@@ -272,15 +275,8 @@ export default function SellerDashboard() {
       }
 
       console.log('✅ Model found:', model.name);
-      console.log('📋 Model ID details:', {
-        providedId: modelId,
-        modelId: model.id,
-        firestoreId: model.firestoreId,
-        name: model.name,
-        status: model.status
-      });
 
-      // Step 2: Check subscription status
+      // Step 2: Check subscription status with Firebase integration
       const approvalCheck = PaymentManager.canUserApproveModel(currentUser, modelId);
       console.log('📋 Approval check result:', approvalCheck);
       
@@ -319,21 +315,12 @@ export default function SellerDashboard() {
       alert('✅ Model approved and listed in marketplace successfully!');
       
     } catch (error: any) {
-      console.error('❌ SOLID Error approving model:', error);
+      console.error('❌ Error approving model:', error);
       
       let errorMessage = 'Error approving model. Please try again.';
       
       if (error.message?.includes('not found')) {
         errorMessage = `Model not found: ${modelId}. It may have been deleted or there's an ID mismatch.`;
-        
-        // Debug: Log all models to see what's happening
-        console.log('🐛 DEBUG: Checking all models for ID mismatch...');
-        const allModels = await unifiedFirestore.debugGetAllModels();
-        const matchingModels = allModels.filter(m => 
-          m.id === modelId || m.firestoreId === modelId
-        );
-        console.log('🐛 DEBUG: Models matching ID:', matchingModels);
-        
         loadSellerData(currentUser.id);
       } else if (error.message?.includes('permission')) {
         errorMessage = 'You do not have permission to approve this model. Please check your subscription status.';
@@ -362,7 +349,7 @@ export default function SellerDashboard() {
       console.log('✅ Model deleted successfully!');
       
       // Refresh data
-      loadSellerData(currentUser.id);
+      await loadSellerData(currentUser.id);
       
       alert('✅ Model deleted successfully!');
     } catch (error: any) {
@@ -418,6 +405,7 @@ export default function SellerDashboard() {
       if (result.success) {
         alert('Payout request submitted successfully!');
         setPayoutAmount('');
+        // Refresh earnings data
         const earnings = await PaymentManager.getSellerEarnings(currentUser.id);
         setEarnings({
           total: earnings.totalRevenue,
@@ -429,6 +417,7 @@ export default function SellerDashboard() {
         alert(`Payout request failed: ${result.error}`);
       }
     } catch (error) {
+      console.error('Payout request error:', error);
       alert('Payout request failed. Please try again.');
     } finally {
       setPayoutLoading(false);
@@ -443,6 +432,14 @@ export default function SellerDashboard() {
     if (currentUser) {
       await checkSubscriptionStatus(currentUser);
       alert('Subscription status refreshed!');
+    }
+  };
+
+  const refreshDashboardData = async () => {
+    if (currentUser) {
+      setLoading(true);
+      await loadSellerData(currentUser.id);
+      alert('Dashboard data refreshed!');
     }
   };
 
@@ -470,6 +467,16 @@ export default function SellerDashboard() {
         </div>
 
         <div className="relative z-10 py-8 px-4 sm:px-6 lg:px-8 space-y-8">
+          {/* Refresh Data Button */}
+          <div className="flex justify-end">
+            <button
+              onClick={refreshDashboardData}
+              className="bg-gradient-to-r from-cyan-500 to-blue-500 text-white px-4 py-2 rounded-xl hover:from-cyan-600 hover:to-blue-600 transition-all duration-200 font-medium shadow-lg shadow-cyan-500/25 text-sm"
+            >
+              🔄 Refresh Data
+            </button>
+          </div>
+
           {subscriptionStatus && !subscriptionStatus.canListModels && (
             <div className="bg-amber-500/20 border border-amber-500/30 rounded-2xl p-6 backdrop-blur-xl">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
